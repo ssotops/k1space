@@ -20,9 +20,10 @@ type CloudConfig struct {
 }
 
 type Lockfile struct {
-	Configs       map[string][]string `json:"configs"`
-	DefaultValues map[string]string   `json:"defaultValues"`
-	CloudRegions  map[string][]string `json:"cloudRegions"`
+	Configs        map[string][]string `json:"configs"`
+	DefaultValues  map[string]string   `json:"defaultValues"`
+	CloudRegions   map[string][]string `json:"cloudRegions"`
+	CloudNodeTypes map[string][]string `json:"cloudNodeTypes"`
 }
 
 var cloudProviders = []string{
@@ -85,6 +86,11 @@ func main() {
 			fmt.Println("Error updating DigitalOcean regions:", err)
 			return
 		}
+		err = updateDigitalOceanNodeTypes(&lockfile)
+		if err != nil {
+			fmt.Println("Error updating DigitalOcean node types:", err)
+			return
+		}
 	}
 
 	regionForm := huh.NewForm(
@@ -111,9 +117,10 @@ func main() {
 	flagInputs := make([]struct{ Name, Value string }, 0, len(flags))
 	flagGroups := make([]huh.Field, 0, len(flags))
 	for _, flag := range flags {
-		if flag == "cloud-region" {
-			continue // Skip cloud-region as we've already set it
+		if flag == "cloud-region" || flag == "node-type" {
+			continue // Skip cloud-region and node-type as we've already set them
 		}
+
 		defaultValue := lockfile.DefaultValues[flag]
 		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
 		flagInputs = append(flagInputs, flagInput)
@@ -124,6 +131,26 @@ func main() {
 				Value(&flagInputs[len(flagInputs)-1].Value),
 		)
 	}
+
+	// Node type selection
+	var selectedNodeType string
+	nodeTypeForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select node type").
+				Options(getNodeTypeOptions(config.CloudPrefix, lockfile)...).
+				Value(&selectedNodeType),
+		),
+	)
+
+	err = nodeTypeForm.Run()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	// Set the node-type flag to the selected node type
+	config.Flags["node-type"] = selectedNodeType
 
 	flagForm := huh.NewForm(
 		huh.NewGroup(flagGroups...),
@@ -141,8 +168,9 @@ func main() {
 		lockfile.DefaultValues[fi.Name] = fi.Value
 	}
 
-	// Ensure cloud-region is set in the lockfile
+	// Ensure cloud-region and node-type is set in the lockfile
 	lockfile.DefaultValues["cloud-region"] = config.Region
+	lockfile.DefaultValues["node-type"] = selectedNodeType
 
 	err = generateFiles(config)
 	if err != nil {
@@ -199,8 +227,57 @@ func loadLockfile() (Lockfile, error) {
 	if lockfile.CloudRegions == nil {
 		lockfile.CloudRegions = make(map[string][]string)
 	}
+	if lockfile.CloudNodeTypes == nil {
+		lockfile.CloudNodeTypes = make(map[string][]string)
+	}
 
 	return lockfile, nil
+}
+
+func getDigitalOceanSizes() ([]string, error) {
+	token := os.Getenv("DIGITALOCEAN_TOKEN")
+	if token == "" {
+		return nil, fmt.Errorf("DIGITALOCEAN_TOKEN not found in environment. Please set it and try again")
+	}
+
+	client := godo.NewFromToken(token)
+	ctx := context.TODO()
+
+	opt := &godo.ListOptions{
+		Page:    1,
+		PerPage: 200,
+	}
+
+	sizes, _, err := client.Sizes.List(ctx, opt)
+	if err != nil {
+		return nil, err
+	}
+
+	var sizeSlugs []string
+	for _, size := range sizes {
+		sizeSlugs = append(sizeSlugs, size.Slug)
+	}
+
+	return sizeSlugs, nil
+}
+
+func getNodeTypeOptions(cloudProvider string, lockfile Lockfile) []huh.Option[string] {
+	nodeTypes := lockfile.CloudNodeTypes[cloudProvider]
+	options := make([]huh.Option[string], len(nodeTypes))
+	for i, nodeType := range nodeTypes {
+		options[i] = huh.Option[string]{Key: nodeType, Value: nodeType}
+	}
+	return options
+}
+
+func updateDigitalOceanNodeTypes(lockfile *Lockfile) error {
+	sizes, err := getDigitalOceanSizes()
+	if err != nil {
+		return err
+	}
+
+	lockfile.CloudNodeTypes["DigitalOcean"] = sizes
+	return nil
 }
 
 func updateDigitalOceanRegions(lockfile *Lockfile) error {
