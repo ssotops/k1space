@@ -27,13 +27,13 @@ type Lockfile struct {
 }
 
 var cloudProviders = []string{
-	"Akamai",
-	"AWS",
+	// "Akamai",
+	// "AWS",
 	"Civo",
 	"DigitalOcean",
-	"Google Cloud",
-	"Vultr",
-	"K3s",
+	// "Google Cloud",
+	// "Vultr",
+	// "K3s",
 	"K3d",
 }
 
