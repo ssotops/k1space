@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/civo/civogo"
 	"github.com/digitalocean/godo"
 )
 
@@ -83,12 +84,23 @@ func main() {
 	if config.CloudPrefix == "DigitalOcean" {
 		err = updateDigitalOceanRegions(&lockfile)
 		if err != nil {
-			fmt.Println("Error updating DigitalOcean regions:", err)
+			fmt.Printf("Error updating %s regions: %v\n", config.CloudPrefix, err)
 			return
 		}
 		err = updateDigitalOceanNodeTypes(&lockfile)
 		if err != nil {
-			fmt.Println("Error updating DigitalOcean node types:", err)
+			fmt.Printf("Error updating %s node types: %v\n", config.CloudPrefix, err)
+			return
+		}
+	} else if config.CloudPrefix == "Civo" {
+		err = updateCivoRegions(&lockfile)
+		if err != nil {
+			fmt.Printf("Error updating %s regions: %v\n", config.CloudPrefix, err)
+			return
+		}
+		err = updateCivoNodeTypes(&lockfile)
+		if err != nil {
+			fmt.Printf("Error updating %s node types: %v\n", config.CloudPrefix, err)
 			return
 		}
 	}
@@ -187,6 +199,54 @@ func main() {
 	fmt.Println("Configuration completed successfully!")
 }
 
+func getCivoClient() (*civogo.Client, error) {
+	token := os.Getenv("CIVO_TOKEN")
+	if token == "" {
+		return nil, fmt.Errorf("CIVO_TOKEN not found in environment. Please set it and try again")
+	}
+	return civogo.NewClient(token, "")
+}
+
+func updateCivoRegions(lockfile *Lockfile) error {
+	client, err := getCivoClient()
+	if err != nil {
+		return err
+	}
+
+	regions, err := client.ListRegions()
+	if err != nil {
+		return err
+	}
+
+	var regionCodes []string
+	for _, region := range regions {
+		regionCodes = append(regionCodes, region.Code)
+	}
+
+	lockfile.CloudRegions["Civo"] = regionCodes
+	return nil
+}
+
+func updateCivoNodeTypes(lockfile *Lockfile) error {
+	client, err := getCivoClient()
+	if err != nil {
+		return err
+	}
+
+	sizes, err := client.ListInstanceSizes()
+	if err != nil {
+		return err
+	}
+
+	var sizeCodes []string
+	for _, size := range sizes {
+		sizeCodes = append(sizeCodes, size.Name)
+	}
+
+	lockfile.CloudNodeTypes["Civo"] = sizeCodes
+	return nil
+}
+
 func getCloudProviderOptions() []huh.Option[string] {
 	options := make([]huh.Option[string], len(cloudProviders))
 	for i, provider := range cloudProviders {
@@ -200,6 +260,15 @@ func getRegionOptions(cloudProvider string, lockfile Lockfile) []huh.Option[stri
 	options := make([]huh.Option[string], len(regions))
 	for i, region := range regions {
 		options[i] = huh.Option[string]{Key: region, Value: region}
+	}
+	return options
+}
+
+func getNodeTypeOptions(cloudProvider string, lockfile Lockfile) []huh.Option[string] {
+	nodeTypes := lockfile.CloudNodeTypes[cloudProvider]
+	options := make([]huh.Option[string], len(nodeTypes))
+	for i, nodeType := range nodeTypes {
+		options[i] = huh.Option[string]{Key: nodeType, Value: nodeType}
 	}
 	return options
 }
@@ -259,15 +328,6 @@ func getDigitalOceanSizes() ([]string, error) {
 	}
 
 	return sizeSlugs, nil
-}
-
-func getNodeTypeOptions(cloudProvider string, lockfile Lockfile) []huh.Option[string] {
-	nodeTypes := lockfile.CloudNodeTypes[cloudProvider]
-	options := make([]huh.Option[string], len(nodeTypes))
-	for i, nodeType := range nodeTypes {
-		options[i] = huh.Option[string]{Key: nodeType, Value: nodeType}
-	}
-	return options
 }
 
 func updateDigitalOceanNodeTypes(lockfile *Lockfile) error {
@@ -376,6 +436,10 @@ func updateLockfile(config CloudConfig, lockfile Lockfile) error {
 		filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "01-kubefirst-cloud.sh"),
 		filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), ".local.cloud.env"),
 	}
+
+	// Ensure cloud-region and node-type are set in the lockfile
+	lockfile.DefaultValues["cloud-region"] = config.Region
+	lockfile.DefaultValues["node-type"] = config.Flags["node-type"]
 
 	// Write the updated lockfile
 	data, err := json.MarshalIndent(lockfile, "", "  ")
