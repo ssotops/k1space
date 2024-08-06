@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/digitalocean/godo"
 )
 
 type CloudConfig struct {
@@ -18,7 +20,9 @@ type CloudConfig struct {
 }
 
 type Lockfile struct {
-	Configs map[string][]string `json:"configs"`
+	Configs       map[string][]string `json:"configs"`
+	DefaultValues map[string]string   `json:"defaultValues"`
+	CloudRegions  map[string][]string `json:"cloudRegions"`
 }
 
 var cloudProviders = []string{
@@ -30,17 +34,6 @@ var cloudProviders = []string{
 	"Vultr",
 	"K3s",
 	"K3d",
-}
-
-var cloudRegions = map[string][]string{
-	"Akamai":       {"us-east", "us-west", "eu-central"},
-	"AWS":          {"us-east-1", "us-west-2", "eu-west-1"},
-	"Civo":         {"NYC1", "LON1", "FRA1"},
-	"DigitalOcean": {"nyc3", "sfo2", "ams3"},
-	"Google Cloud": {"us-central1", "europe-west1", "asia-east1"},
-	"Vultr":        {"ewr", "lax", "ams"},
-	"K3s":          {"local"},
-	"K3d":          {"local"},
 }
 
 var cloudFlags = map[string][]string{
@@ -59,6 +52,12 @@ func main() {
 		Flags: make(map[string]string),
 	}
 
+	lockfile, err := loadLockfile()
+	if err != nil {
+		fmt.Println("Error loading lockfile:", err)
+		return
+	}
+
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -74,17 +73,25 @@ func main() {
 		),
 	)
 
-	err := form.Run()
+	err = form.Run()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
+	}
+
+	if config.CloudPrefix == "DigitalOcean" {
+		err = updateDigitalOceanRegions(&lockfile)
+		if err != nil {
+			fmt.Println("Error updating DigitalOcean regions:", err)
+			return
+		}
 	}
 
 	regionForm := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select region").
-				Options(getRegionOptions(config.CloudPrefix)...).
+				Options(getRegionOptions(config.CloudPrefix, lockfile)...).
 				Value(&config.Region),
 		),
 	)
@@ -101,14 +108,20 @@ func main() {
 		return
 	}
 
-	flagInputs := make([]struct{ Name, Value string }, len(flags))
+	flagInputs := make([]struct{ Name, Value string }, 0, len(flags))
 	flagGroups := make([]huh.Field, 0, len(flags))
-	for i, flag := range flags {
-		flagInputs[i] = struct{ Name, Value string }{Name: flag}
+	for _, flag := range flags {
+		if flag == "cloud-region" {
+			continue // Skip cloud-region as we've already set it
+		}
+		defaultValue := lockfile.DefaultValues[flag]
+		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
+		flagInputs = append(flagInputs, flagInput)
 		flagGroups = append(flagGroups,
 			huh.NewInput().
 				Title(fmt.Sprintf("Enter value for %s", flag)).
-				Value(&flagInputs[i].Value),
+				Placeholder(defaultValue).
+				Value(&flagInputs[len(flagInputs)-1].Value),
 		)
 	}
 
@@ -122,10 +135,14 @@ func main() {
 		return
 	}
 
-	// Update config.Flags with the collected values
+	// Update config.Flags and lockfile.DefaultValues with the collected values
 	for _, fi := range flagInputs {
 		config.Flags[fi.Name] = fi.Value
+		lockfile.DefaultValues[fi.Name] = fi.Value
 	}
+
+	// Ensure cloud-region is set in the lockfile
+	lockfile.DefaultValues["cloud-region"] = config.Region
 
 	err = generateFiles(config)
 	if err != nil {
@@ -133,7 +150,7 @@ func main() {
 		return
 	}
 
-	err = updateLockfile(config)
+	err = updateLockfile(config, lockfile)
 	if err != nil {
 		fmt.Println("Error updating lockfile:", err)
 		return
@@ -150,13 +167,68 @@ func getCloudProviderOptions() []huh.Option[string] {
 	return options
 }
 
-func getRegionOptions(cloudProvider string) []huh.Option[string] {
-	regions := cloudRegions[cloudProvider]
+func getRegionOptions(cloudProvider string, lockfile Lockfile) []huh.Option[string] {
+	regions := lockfile.CloudRegions[cloudProvider]
 	options := make([]huh.Option[string], len(regions))
 	for i, region := range regions {
 		options[i] = huh.Option[string]{Key: region, Value: region}
 	}
 	return options
+}
+
+func loadLockfile() (Lockfile, error) {
+	lockfilePath := filepath.Join(os.Getenv("HOME"), ".k1space", "k1.locked.json")
+	var lockfile Lockfile
+
+	data, err := os.ReadFile(lockfilePath)
+	if err == nil {
+		err = json.Unmarshal(data, &lockfile)
+		if err != nil {
+			return lockfile, err
+		}
+	} else if !os.IsNotExist(err) {
+		return lockfile, err
+	}
+
+	if lockfile.Configs == nil {
+		lockfile.Configs = make(map[string][]string)
+	}
+	if lockfile.DefaultValues == nil {
+		lockfile.DefaultValues = make(map[string]string)
+	}
+	if lockfile.CloudRegions == nil {
+		lockfile.CloudRegions = make(map[string][]string)
+	}
+
+	return lockfile, nil
+}
+
+func updateDigitalOceanRegions(lockfile *Lockfile) error {
+	token := os.Getenv("DIGITALOCEAN_TOKEN")
+	if token == "" {
+		return fmt.Errorf("DIGITALOCEAN_TOKEN not found in environment. Please set it and try again")
+	}
+
+	client := godo.NewFromToken(token)
+	ctx := context.TODO()
+
+	opt := &godo.ListOptions{
+		Page:    1,
+		PerPage: 200,
+	}
+
+	regions, _, err := client.Regions.List(ctx, opt)
+	if err != nil {
+		return err
+	}
+
+	var regionSlugs []string
+	for _, region := range regions {
+		regionSlugs = append(regionSlugs, region.Slug)
+	}
+
+	lockfile.CloudRegions["DigitalOcean"] = regionSlugs
+	return nil
 }
 
 func generateFiles(config CloudConfig) error {
@@ -217,25 +289,8 @@ func generateKubefirstContent(config CloudConfig) string {
 	return content.String()
 }
 
-func updateLockfile(config CloudConfig) error {
+func updateLockfile(config CloudConfig, lockfile Lockfile) error {
 	lockfilePath := filepath.Join(os.Getenv("HOME"), ".k1space", "k1.locked.json")
-	var lockfile Lockfile
-
-	// Read existing lockfile if it exists
-	data, err := os.ReadFile(lockfilePath)
-	if err == nil {
-		err = json.Unmarshal(data, &lockfile)
-		if err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-
-	// Initialize the map if it doesn't exist
-	if lockfile.Configs == nil {
-		lockfile.Configs = make(map[string][]string)
-	}
 
 	// Add the new configuration
 	key := fmt.Sprintf("%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
@@ -246,7 +301,7 @@ func updateLockfile(config CloudConfig) error {
 	}
 
 	// Write the updated lockfile
-	data, err = json.MarshalIndent(lockfile, "", "  ")
+	data, err := json.MarshalIndent(lockfile, "", "  ")
 	if err != nil {
 		return err
 	}
