@@ -10,9 +10,21 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/log"
 	"github.com/civo/civogo"
 	"github.com/digitalocean/godo"
-	"github.com/fatih/color"
+)
+
+var (
+	style = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#7D56F4")).
+		PaddingTop(1).
+		PaddingBottom(1).
+		PaddingLeft(4).
+		PaddingRight(4)
 )
 
 type CloudConfig struct {
@@ -60,13 +72,79 @@ var cloudFlags = map[string][]string{
 }
 
 func main() {
+	log.SetOutput(os.Stderr)
+
+	for {
+		action := runMainMenu()
+		switch action {
+		case "Config":
+			runConfigMenu()
+		case "Exit":
+			fmt.Println("Exiting k1space. Goodbye!")
+			return
+		}
+	}
+}
+
+func runMainMenu() string {
+	var selected string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("K1Space Main Menu").
+				Options(
+					huh.NewOption("Config", "Config"),
+					huh.NewOption("Exit", "Exit"),
+				).
+				Value(&selected),
+		),
+	)
+
+	err := form.Run()
+	if err != nil {
+		log.Error("Error running main menu", "error", err)
+		os.Exit(1)
+	}
+
+	return selected
+}
+
+func runConfigMenu() {
+	var selected string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Config Menu").
+				Options(
+					huh.NewOption("Create Config", "Create Config"),
+					huh.NewOption("Back", "Back"),
+				).
+				Value(&selected),
+		),
+	)
+
+	err := form.Run()
+	if err != nil {
+		log.Error("Error running config menu", "error", err)
+		return
+	}
+
+	switch selected {
+	case "Create Config":
+		createConfig()
+	case "Back":
+		return
+	}
+}
+
+func createConfig() {
 	config := CloudConfig{
 		Flags: make(map[string]string),
 	}
 
 	lockfile, err := loadLockfile()
 	if err != nil {
-		fmt.Println("Error loading lockfile:", err)
+		log.Error("Error loading lockfile", "error", err)
 		return
 	}
 
@@ -87,30 +165,30 @@ func main() {
 
 	err = form.Run()
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Error("Error in initial config form", "error", err)
 		return
 	}
 
 	if config.CloudPrefix == "DigitalOcean" {
 		err = updateDigitalOceanRegions(&lockfile)
 		if err != nil {
-			fmt.Printf("Error updating %s regions: %v\n", config.CloudPrefix, err)
+			log.Error("Error updating DigitalOcean regions", "error", err)
 			return
 		}
 		err = updateDigitalOceanNodeTypes(&lockfile)
 		if err != nil {
-			fmt.Printf("Error updating %s node types: %v\n", config.CloudPrefix, err)
+			log.Error("Error updating DigitalOcean node types", "error", err)
 			return
 		}
 	} else if config.CloudPrefix == "Civo" {
 		err = updateCivoRegions(&lockfile)
 		if err != nil {
-			fmt.Printf("Error updating %s regions: %v\n", config.CloudPrefix, err)
+			log.Error("Error updating Civo regions", "error", err)
 			return
 		}
 		err = updateCivoNodeTypes(&lockfile)
 		if err != nil {
-			fmt.Printf("Error updating %s node types: %v\n", config.CloudPrefix, err)
+			log.Error("Error updating Civo node types", "error", err)
 			return
 		}
 	}
@@ -126,13 +204,13 @@ func main() {
 
 	err = regionForm.Run()
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Error("Error in region selection", "error", err)
 		return
 	}
 
 	flags := cloudFlags[config.CloudPrefix]
 	if len(flags) == 0 {
-		fmt.Println("No flags found for the selected cloud provider.")
+		log.Error("No flags found for the selected cloud provider")
 		return
 	}
 
@@ -166,7 +244,7 @@ func main() {
 
 	err = nodeTypeForm.Run()
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Error("Error in node type selection", "error", err)
 		return
 	}
 
@@ -182,7 +260,7 @@ func main() {
 
 	err = flagForm.Run()
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Error("Error in flag input form", "error", err)
 		return
 	}
 
@@ -198,40 +276,37 @@ func main() {
 
 	err = generateFiles(config)
 	if err != nil {
-		fmt.Println("Error generating files:", err)
+		log.Error("Error generating files", "error", err)
 		return
 	}
 
 	err = updateLockfile(config, lockfile)
 	if err != nil {
-		fmt.Println("Error updating lockfile:", err)
+		log.Error("Error updating lockfile", "error", err)
 		return
 	}
+
 	// Define baseDir
 	baseDir := filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 
 	// Pretty-print the summary
-	color.New(color.FgGreen, color.Bold).Println("\n✅ Configuration completed successfully! Summary:")
+	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))
 	fmt.Println()
 
-	// Create color functions
-	bold := color.New(color.Bold).SprintFunc()
-	cyan := color.New(color.FgCyan).SprintFunc()
-
-	fmt.Printf("%s %s\n", bold("☁️  Cloud Provider:"), cyan(config.CloudPrefix))
-	fmt.Printf("%s %s\n", bold("🌎 Region:"), cyan(config.Region))
-	fmt.Printf("%s %s\n", bold("💻 Node Type:"), cyan(selectedNodeType))
+	fmt.Printf("☁️  Cloud Provider: %s\n", config.CloudPrefix)
+	fmt.Printf("🌎 Region: %s\n", config.Region)
+	fmt.Printf("💻 Node Type: %s\n", selectedNodeType)
 
 	// Print relevant file paths
-	color.New(color.FgYellow, color.Bold).Println("\n📁 Generated Files:")
+	fmt.Println(style.Render("\n📁 Generated Files:"))
 	filePrefix := "  "
-	fmt.Printf("%s%s %s\n", filePrefix, bold("Init Script:"), filepath.Join(baseDir, "00-init.sh"))
-	fmt.Printf("%s%s %s\n", filePrefix, bold("Kubefirst Script:"), filepath.Join(baseDir, "01-kubefirst-cloud.sh"))
-	fmt.Printf("%s%s %s\n", filePrefix, bold("Environment File:"), filepath.Join(baseDir, ".local.cloud.env"))
+	fmt.Printf("%sInit Script: %s\n", filePrefix, filepath.Join(baseDir, "00-init.sh"))
+	fmt.Printf("%sKubefirst Script: %s\n", filePrefix, filepath.Join(baseDir, "01-kubefirst-cloud.sh"))
+	fmt.Printf("%sEnvironment File: %s\n", filePrefix, filepath.Join(baseDir, ".local.cloud.env"))
 
 	// Print command to run the generated init script
-	color.New(color.FgMagenta, color.Bold).Println("\n🚀 To run the initialization script, use the following command:")
-	color.New(color.FgHiBlue).Printf("cd %s && ./00-init.sh\n", baseDir)
+	fmt.Println(style.Render("\n🚀 To run the initialization script, use the following command:"))
+	fmt.Printf("cd %s && ./00-init.sh\n", baseDir)
 }
 
 func getCivoClient() (*civogo.Client, error) {
