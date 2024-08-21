@@ -1,4 +1,4 @@
-module github.com/capswan/arc-k1space
+module github.com/ssotops/k1space
 
 go 1.22.2
 
