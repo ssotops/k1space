@@ -121,7 +121,7 @@ func runKubefirstMenu() {
 				huh.NewSelect[string]().
 					Title("Kubefirst Menu").
 					Options(
-						huh.NewOption("Setup Repositories", "Setup Repositories"),
+						huh.NewOption("Clone Repositories", "Clone Repositories"),
 						huh.NewOption("Sync Repositories", "Sync Repositories"),
 						huh.NewOption("Setup Kubefirst", "Setup Kubefirst"),
 						huh.NewOption("Back", "Back"),
@@ -137,7 +137,7 @@ func runKubefirstMenu() {
 		}
 
 		switch selected {
-		case "Setup Repositories":
+		case "Clone Repositories":
 			setupKubefirstRepositories()
 		case "Sync Repositories":
 			syncKubefirstRepositories()
@@ -845,7 +845,7 @@ func setupConsoleEnvironment() error {
 		form := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
-					Title("The .env file already exists. Do you want to overwrite it?").
+					Title("The .env file in `Console` already exists. Do you want to overwrite it?").
 					Value(&overwrite),
 			),
 		)
