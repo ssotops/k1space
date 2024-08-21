@@ -114,33 +114,58 @@ func runMainMenu() string {
 }
 
 func runKubefirstMenu() {
-	var selected string
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Kubefirst Menu").
-				Options(
-					huh.NewOption("Setup Repositories", "Setup Repositories"),
-					huh.NewOption("Sync Repositories", "Sync Repositories"),
-					huh.NewOption("Back", "Back"),
-				).
-				Value(&selected),
-		),
-	)
+	for {
+		var selected string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Kubefirst Menu").
+					Options(
+						huh.NewOption("Setup Repositories", "Setup Repositories"),
+						huh.NewOption("Sync Repositories", "Sync Repositories"),
+						huh.NewOption("Setup Kubefirst", "Setup Kubefirst"),
+						huh.NewOption("Back", "Back"),
+					).
+					Value(&selected),
+			),
+		)
 
-	err := form.Run()
-	if err != nil {
-		log.Error("Error running Kubefirst menu", "error", err)
-		return
-	}
+		err := form.Run()
+		if err != nil {
+			log.Error("Error running Kubefirst menu", "error", err)
+			return
+		}
 
-	switch selected {
-	case "Setup Repositories":
-		setupKubefirstRepositories()
-	case "Sync Repositories":
-		syncKubefirstRepositories()
-	case "Back":
-		return
+		switch selected {
+		case "Setup Repositories":
+			setupKubefirstRepositories()
+		case "Sync Repositories":
+			syncKubefirstRepositories()
+		case "Setup Kubefirst":
+			handleKubefirstSetup()
+		case "Back":
+			return
+		}
+
+		// Prompt user to continue or return to main menu
+		var continueAction bool
+		continueForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Do you want to perform another Kubefirst action?").
+					Value(&continueAction),
+			),
+		)
+
+		err = continueForm.Run()
+		if err != nil {
+			log.Error("Error in continue prompt", "error", err)
+			return
+		}
+
+		if !continueAction {
+			return
+		}
 	}
 }
 
@@ -800,4 +825,159 @@ func updateLockfile(config CloudConfig, lockfile Lockfile) error {
 	}
 
 	return os.WriteFile(lockfilePath, data, 0644)
+}
+
+func setupConsoleEnvironment() error {
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	consoleDir := filepath.Join(baseDir, "console")
+	envExamplePath := filepath.Join(consoleDir, ".env.example")
+	envPath := filepath.Join(consoleDir, ".env")
+
+	// Read .env.example
+	content, err := os.ReadFile(envExamplePath)
+	if err != nil {
+		return fmt.Errorf("error reading .env.example: %w", err)
+	}
+
+	// Check if .env already exists
+	if _, err := os.Stat(envPath); err == nil {
+		var overwrite bool
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("The .env file already exists. Do you want to overwrite it?").
+					Value(&overwrite),
+			),
+		)
+
+		err = form.Run()
+		if err != nil {
+			return fmt.Errorf("error in user prompt: %w", err)
+		}
+
+		if !overwrite {
+			fmt.Println("Skipping .env creation.")
+			return nil
+		}
+	}
+
+	// Create .env file
+	err = os.WriteFile(envPath, content, 0644)
+	if err != nil {
+		return fmt.Errorf("error creating .env file: %w", err)
+	}
+
+	fmt.Println("Created .env file for Console.")
+
+	// Set K1_LOCAL_DEBUG environment variable
+	err = os.Setenv("K1_LOCAL_DEBUG", "true")
+	if err != nil {
+		return fmt.Errorf("error setting K1_LOCAL_DEBUG: %w", err)
+	}
+
+	fmt.Println("Set K1_LOCAL_DEBUG=true")
+
+	return nil
+}
+
+func runKubefirstSetup() error {
+	// Setup Console Environment
+	err := setupConsoleEnvironment()
+	if err != nil {
+		log.Error("Error setting up Console environment", "error", err)
+		return err
+	}
+
+	// Setup Kubefirst API
+	err = setupKubefirstAPI()
+	if err != nil {
+		log.Error("Error setting up Kubefirst API", "error", err)
+		return err
+	}
+
+	// Setup Kubefirst
+	err = setupKubefirst()
+	if err != nil {
+		log.Error("Error setting up Kubefirst", "error", err)
+		return err
+	}
+
+	return nil
+}
+
+func setupKubefirstAPI() error {
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	apiDir := filepath.Join(baseDir, "kubefirst-api")
+
+	// Checkout feature branch
+	cmd := exec.Command("git", "-C", apiDir, "checkout", "feat-custom-repo")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error checking out feat-custom-repo: %w\nOutput: %s", err, output)
+	}
+
+	fmt.Println("Checked out feat-custom-repo branch for Kubefirst API")
+
+	// TODO: Add instructions to run the API locally
+	fmt.Println("Please follow the instructions in the Kubefirst API README to set up and run the API locally.")
+
+	return nil
+}
+
+func setupKubefirst() error {
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	kubefirstDir := filepath.Join(baseDir, "kubefirst")
+
+	// Set K1_LOCAL_DEBUG environment variable
+	err := os.Setenv("K1_LOCAL_DEBUG", "true")
+	if err != nil {
+		return fmt.Errorf("error setting K1_LOCAL_DEBUG: %w", err)
+	}
+
+	fmt.Println("Set K1_LOCAL_DEBUG=true for Kubefirst")
+
+	// Checkout feature branch
+	cmd := exec.Command("git", "-C", kubefirstDir, "checkout", "feat-custom-repo")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error checking out feat-custom-repo: %w\nOutput: %s", err, output)
+	}
+
+	fmt.Println("Checked out feat-custom-repo branch for Kubefirst")
+
+	// Update go.mod
+	apiDir := filepath.Join(baseDir, "kubefirst-api")
+	goModPath := filepath.Join(kubefirstDir, "go.mod")
+
+	goModContent, err := os.ReadFile(goModPath)
+	if err != nil {
+		return fmt.Errorf("error reading go.mod: %w", err)
+	}
+
+	newContent := strings.Replace(string(goModContent),
+		"github.com/kubefirst/kubefirst-api v0.1.26",
+		fmt.Sprintf("github.com/kubefirst/kubefirst-api v0.1.26 => %s", apiDir),
+		1)
+
+	err = os.WriteFile(goModPath, []byte(newContent), 0644)
+	if err != nil {
+		return fmt.Errorf("error updating go.mod: %w", err)
+	}
+
+	fmt.Println("Updated go.mod to point to local Kubefirst API repository")
+
+	// TODO: Add instructions to build and run Kubefirst
+	fmt.Println("Please build the Kubefirst binary and execute the create command with the necessary parameters.")
+
+	return nil
+}
+
+// Add this function to your main menu or where appropriate
+func handleKubefirstSetup() {
+	err := runKubefirstSetup()
+	if err != nil {
+		log.Error("Error in Kubefirst setup", "error", err)
+	} else {
+		fmt.Println("Kubefirst setup completed successfully!")
+	}
 }
