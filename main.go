@@ -186,6 +186,7 @@ func runKubefirstMenu() {
 }
 
 func provisionCluster() {
+	log.Info("Starting provisionCluster function")
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
@@ -211,6 +212,7 @@ func provisionCluster() {
 		return
 	}
 
+	log.Info("Presenting config selection to user", "optionCount", len(configOptions))
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -222,9 +224,10 @@ func provisionCluster() {
 
 	err = form.Run()
 	if err != nil {
-		log.Error("Error selecting configuration", "error", err)
+		log.Error("Error in config selection", "error", err)
 		return
 	}
+	log.Info("User selected config", "selectedConfig", selectedConfig)
 
 	// Display files in selected config
 	files := indexFile.Configs[selectedConfig].Files
@@ -234,6 +237,7 @@ func provisionCluster() {
 		fileOptions = append(fileOptions, huh.NewOption(filepath.Base(file), file))
 	}
 
+	log.Info("Presenting file selection to user", "optionCount", len(fileOptions))
 	form = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -248,6 +252,7 @@ func provisionCluster() {
 		log.Error("Error selecting file", "error", err)
 		return
 	}
+	log.Info("User selected file", "selectedFile", selectedFile)
 
 	// Read and display file contents
 	content, err := os.ReadFile(selectedFile)
@@ -299,12 +304,15 @@ func provisionCluster() {
 		}
 
 		if finalConfirm {
+			log.Info("User confirmed cluster provisioning")
 			fmt.Println("Provisioning cluster...")
 			// Add logic here to run 00-init.sh
 		} else {
+			log.Info("User cancelled cluster provisioning")
 			fmt.Println("Cluster provisioning cancelled.")
 		}
 	} else {
+		log.Info("User chose not to run 00-init.sh")
 		fmt.Println("Cluster provisioning cancelled.")
 	}
 }
@@ -783,110 +791,16 @@ func loadIndexFile() (IndexFile, error) {
 	}
 	log.Info("Successfully read index.hcl", "bytes", len(data))
 
-	// Parse HCL file
-	file, diags := hclsyntax.ParseConfig(data, indexPath, hcl.Pos{Line: 1, Column: 1})
-	if diags.HasErrors() {
-		log.Error("Failed to parse index.hcl", "diagnostics", diags.Error())
-		return indexFile, fmt.Errorf("error parsing index.hcl: %s", diags)
-	}
-	log.Info("Successfully parsed index.hcl")
+	content := string(data)
+	configs := simpleHCLParser(content)
 
-	// Extract data from HCL
-	content, _, diags := file.Body.PartialContent(&hcl.BodySchema{
-		Attributes: []hcl.AttributeSchema{
-			{Name: "version"},
-			{Name: "last_updated"},
-		},
-		Blocks: []hcl.BlockHeaderSchema{
-			{Type: "configs"},
-			{Type: "default_values"},
-		},
-	})
-	if diags.HasErrors() {
-		log.Error("Failed to extract content from index.hcl", "diagnostics", diags.Error())
-		return indexFile, fmt.Errorf("error extracting content from index.hcl: %s", diags)
-	}
-	log.Info("Successfully extracted content from index.hcl")
-
-	// Parse version
-	if attr, exists := content.Attributes["version"]; exists {
-		value, diags := attr.Expr.Value(nil)
-		if !diags.HasErrors() && value.Type() == cty.Number {
-			intValue, _ := value.AsBigFloat().Int64()
-			indexFile.Version = int(intValue)
-			log.Info("Parsed version", "version", indexFile.Version)
-		}
-	}
-
-	// Parse last_updated
-	if attr, exists := content.Attributes["last_updated"]; exists {
-		value, diags := attr.Expr.Value(nil)
-		if !diags.HasErrors() {
-			indexFile.LastUpdated = value.AsString()
-			log.Info("Parsed last_updated", "lastUpdated", indexFile.LastUpdated)
-		}
-	}
-
-	// Parse configs
 	indexFile.Configs = make(map[string]Config)
-	for _, block := range content.Blocks {
-		if block.Type == "configs" {
-			log.Info("Parsing configs block")
-			configsContent, diags := block.Body.Content(&hcl.BodySchema{
-				Blocks: []hcl.BlockHeaderSchema{
-					{Type: "*"},
-				},
-			})
-			if diags.HasErrors() {
-				log.Error("Failed to parse configs block", "diagnostics", diags.Error())
-				return indexFile, fmt.Errorf("error parsing configs block: %s", diags)
-			}
-			for _, configBlock := range configsContent.Blocks {
-				configName := configBlock.Type
-				log.Info("Parsing config", "name", configName)
-				var config Config
-				configContent, _ := configBlock.Body.Content(&hcl.BodySchema{
-					Attributes: []hcl.AttributeSchema{
-						{Name: "files"},
-					},
-				})
-				if attr, exists := configContent.Attributes["files"]; exists {
-					values, diags := attr.Expr.Value(nil)
-					if !diags.HasErrors() && values.CanIterateElements() {
-						it := values.ElementIterator()
-						for it.Next() {
-							_, value := it.Element()
-							config.Files = append(config.Files, value.AsString())
-						}
-					}
-				}
-				indexFile.Configs[configName] = config
-				log.Info("Parsed config", "name", configName, "fileCount", len(config.Files))
-			}
-		}
+	for configName, files := range configs {
+		indexFile.Configs[configName] = Config{Files: files}
+		log.Info("Parsed config", "name", configName, "fileCount", len(files))
 	}
 
-	// Parse default_values
-	indexFile.DefaultValues = make(map[string]string)
-	for _, block := range content.Blocks {
-		if block.Type == "default_values" {
-			log.Info("Parsing default_values block")
-			defaultValuesContent, _ := block.Body.Content(&hcl.BodySchema{
-				Attributes: []hcl.AttributeSchema{
-					{Name: "*"},
-				},
-			})
-			for name, attr := range defaultValuesContent.Attributes {
-				value, diags := attr.Expr.Value(nil)
-				if !diags.HasErrors() {
-					indexFile.DefaultValues[name] = value.AsString()
-					log.Info("Parsed default value", "name", name, "value", value.AsString())
-				}
-			}
-		}
-	}
-
-	log.Info("Finished parsing index.hcl", "configCount", len(indexFile.Configs), "defaultValueCount", len(indexFile.DefaultValues))
+	log.Info("Finished parsing index.hcl", "configCount", len(indexFile.Configs))
 	return indexFile, nil
 }
 
@@ -1446,4 +1360,46 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func verifyIndexFile() {
+	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
+	content, err := os.ReadFile(indexPath)
+	if err != nil {
+		log.Error("Failed to read index.hcl", "error", err)
+		return
+	}
+	fmt.Println("Contents of index.hcl:")
+	fmt.Println(string(content))
+}
+
+func simpleHCLParser(content string) map[string][]string {
+	configs := make(map[string][]string)
+	lines := strings.Split(content, "\n")
+	inConfigsBlock := false
+	currentConfig := ""
+
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "configs {" {
+			inConfigsBlock = true
+			continue
+		}
+		if inConfigsBlock {
+			if strings.HasSuffix(trimmedLine, "{") {
+				currentConfig = strings.TrimSuffix(trimmedLine, " {")
+				configs[currentConfig] = []string{}
+			} else if trimmedLine == "}" {
+				if currentConfig != "" {
+					currentConfig = ""
+				} else {
+					inConfigsBlock = false
+				}
+			} else if strings.HasPrefix(trimmedLine, "files = [") {
+				files := strings.Trim(strings.TrimPrefix(trimmedLine, "files = ["), "]")
+				configs[currentConfig] = append(configs[currentConfig], strings.Split(files, ", ")...)
+			}
+		}
+	}
+	return configs
 }
