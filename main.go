@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-  "time"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -16,6 +16,7 @@ import (
 	"github.com/civo/civogo"
 	"github.com/digitalocean/godo"
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
 )
@@ -38,20 +39,28 @@ type CloudConfig struct {
 	Flags        map[string]string
 }
 
+type IndexFile struct {
+	Version       int               `hcl:"version"`
+	LastUpdated   string            `hcl:"last_updated"`
+	Configs       map[string]Config `hcl:"configs"`
+	DefaultValues map[string]string `hcl:"default_values"`
+}
+
+type Config struct {
+	Files []string `hcl:"files"`
+}
+
+type CloudsFile struct {
+	LastUpdated    string                        `hcl:"last_updated"`
+	CloudRegions   map[string][]string           `hcl:"cloud_regions"`
+	CloudNodeTypes map[string][]InstanceSizeInfo `hcl:"cloud_node_types"`
+}
+
 type InstanceSizeInfo struct {
 	Name          string
 	CPUCores      int
 	RAMMegabytes  int
 	DiskGigabytes int
-}
-
-type IndexFile struct {
-	Version        int                           `hcl:"version"`
-	LastUpdated    string                        `hcl:"last_updated"`
-	Configs        map[string][]string           `hcl:"configs"`
-	DefaultValues  map[string]string             `hcl:"default_values"`
-	CloudRegions   map[string][]string           `hcl:"cloud_regions"`
-	CloudNodeTypes map[string][]InstanceSizeInfo `hcl:"cloud_node_types"`
 }
 
 var cloudProviders = []string{
@@ -190,6 +199,11 @@ func provisionCluster() {
 		configOptions = append(configOptions, huh.NewOption(config, config))
 	}
 
+	if len(configOptions) == 0 {
+		fmt.Println("No configurations available. Please create a configuration first.")
+		return
+	}
+
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -206,7 +220,7 @@ func provisionCluster() {
 	}
 
 	// Display files in selected config
-	files := indexFile.Configs[selectedConfig]
+	files := indexFile.Configs[selectedConfig].Files
 	var selectedFile string
 	fileOptions := make([]huh.Option[string], 0, len(files))
 	for _, file := range files {
@@ -444,15 +458,26 @@ func runConfigMenu() {
 }
 
 func createConfig() {
+	log.Info("Starting createConfig function")
+
 	config := CloudConfig{
 		Flags: make(map[string]string),
 	}
+	log.Info("CloudConfig initialized", "config", fmt.Sprintf("%+v", config))
 
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
 		return
 	}
+	log.Info("Index file loaded", "indexFile", fmt.Sprintf("%+v", indexFile))
+
+	cloudsFile, err := loadCloudsFile()
+	if err != nil {
+		log.Error("Error loading clouds file", "error", err)
+		return
+	}
+	log.Info("Clouds file loaded", "cloudsFile", fmt.Sprintf("%+v", cloudsFile))
 
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -474,36 +499,38 @@ func createConfig() {
 		log.Error("Error in initial config form", "error", err)
 		return
 	}
+	log.Info("Initial form completed", "StaticPrefix", config.StaticPrefix, "CloudPrefix", config.CloudPrefix)
 
 	if config.CloudPrefix == "DigitalOcean" {
-		err = updateDigitalOceanRegions(&indexFile)
+		err = updateDigitalOceanRegions(&cloudsFile)
 		if err != nil {
 			log.Error("Error updating DigitalOcean regions", "error", err)
 			return
 		}
-		err = updateDigitalOceanNodeTypes(&indexFile)
+		err = updateDigitalOceanNodeTypes(&cloudsFile)
 		if err != nil {
 			log.Error("Error updating DigitalOcean node types", "error", err)
 			return
 		}
 	} else if config.CloudPrefix == "Civo" {
-		err = updateCivoRegions(&indexFile)
+		err = updateCivoRegions(&cloudsFile)
 		if err != nil {
 			log.Error("Error updating Civo regions", "error", err)
 			return
 		}
-		err = updateCivoNodeTypes(&indexFile)
+		err = updateCivoNodeTypes(&cloudsFile)
 		if err != nil {
 			log.Error("Error updating Civo node types", "error", err)
 			return
 		}
 	}
+	log.Info("Cloud provider specific updates completed")
 
 	regionForm := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select region").
-				Options(getRegionOptions(config.CloudPrefix, indexFile)...).
+				Options(getRegionOptions(config.CloudPrefix, cloudsFile)...).
 				Value(&config.Region),
 		),
 	)
@@ -513,12 +540,14 @@ func createConfig() {
 		log.Error("Error in region selection", "error", err)
 		return
 	}
+	log.Info("Region selected", "Region", config.Region)
 
 	flags := cloudFlags[config.CloudPrefix]
 	if len(flags) == 0 {
 		log.Error("No flags found for the selected cloud provider")
 		return
 	}
+	log.Info("Flags retrieved for cloud provider", "Flags", flags)
 
 	flagInputs := make([]struct{ Name, Value string }, 0, len(flags))
 	flagGroups := make([]huh.Field, 0, len(flags))
@@ -537,13 +566,14 @@ func createConfig() {
 				Value(&flagInputs[len(flagInputs)-1].Value),
 		)
 	}
+	log.Info("Flag inputs and groups prepared", "FlagInputs", flagInputs)
 
 	var selectedNodeType string
 	nodeTypeForm := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select node type").
-				Options(getNodeTypeOptions(config.CloudPrefix, indexFile)...).
+				Options(getNodeTypeOptions(config.CloudPrefix, cloudsFile)...).
 				Value(&selectedNodeType),
 		),
 	)
@@ -553,12 +583,18 @@ func createConfig() {
 		log.Error("Error in node type selection", "error", err)
 		return
 	}
+	log.Info("Node type selected", "SelectedNodeType", selectedNodeType)
 
 	// Extract the actual node type name from the selected value
 	nodeTypeName := strings.Split(selectedNodeType, " ")[0]
 
 	// Set the node-type flag to the selected node type name
+	if config.Flags == nil {
+		log.Error("config.Flags is nil, reinitializing")
+		config.Flags = make(map[string]string)
+	}
 	config.Flags["node-type"] = nodeTypeName
+	log.Info("Node type set in config.Flags", "NodeType", nodeTypeName)
 
 	flagForm := huh.NewForm(
 		huh.NewGroup(flagGroups...),
@@ -569,28 +605,52 @@ func createConfig() {
 		log.Error("Error in flag input form", "error", err)
 		return
 	}
+	log.Info("Flag input form completed")
 
 	// Update config.Flags and indexFile.DefaultValues with the collected values
 	for _, fi := range flagInputs {
+		if config.Flags == nil {
+			log.Error("config.Flags is nil, reinitializing")
+			config.Flags = make(map[string]string)
+		}
 		config.Flags[fi.Name] = fi.Value
+		if indexFile.DefaultValues == nil {
+			log.Error("indexFile.DefaultValues is nil, initializing")
+			indexFile.DefaultValues = make(map[string]string)
+		}
 		indexFile.DefaultValues[fi.Name] = fi.Value
 	}
+	log.Info("Updated config.Flags and indexFile.DefaultValues", "ConfigFlags", config.Flags, "IndexFileDefaultValues", indexFile.DefaultValues)
 
 	// Ensure cloud-region and node-type is set in the indexFile
+	if indexFile.DefaultValues == nil {
+		log.Error("indexFile.DefaultValues is nil, initializing")
+		indexFile.DefaultValues = make(map[string]string)
+	}
 	indexFile.DefaultValues["cloud-region"] = config.Region
 	indexFile.DefaultValues["node-type"] = selectedNodeType
+	log.Info("Set cloud-region and node-type in indexFile.DefaultValues")
 
 	err = generateFiles(config)
 	if err != nil {
 		log.Error("Error generating files", "error", err)
 		return
 	}
+	log.Info("Files generated successfully")
 
 	err = updateIndexFile(config, indexFile)
 	if err != nil {
 		log.Error("Error updating index file", "error", err)
 		return
 	}
+	log.Info("Index file updated successfully")
+
+	err = updateCloudsFile(config, cloudsFile)
+	if err != nil {
+		log.Error("Error updating clouds file", "error", err)
+		return
+	}
+	log.Info("Clouds file updated successfully")
 
 	// Define baseDir
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
@@ -613,6 +673,8 @@ func createConfig() {
 	// Print command to run the generated init script
 	fmt.Println(style.Render("\n🚀 To run the initialization script, use the following command:"))
 	fmt.Printf("cd %s && ./00-init.sh\n", baseDir)
+
+	log.Info("createConfig function completed successfully")
 }
 
 func getCivoClient() (*civogo.Client, error) {
@@ -623,7 +685,7 @@ func getCivoClient() (*civogo.Client, error) {
 	return civogo.NewClient(token, "")
 }
 
-func updateCivoRegions(indexFile *IndexFile) error {
+func updateCivoRegions(cloudsFile *CloudsFile) error {
 	client, err := getCivoClient()
 	if err != nil {
 		return err
@@ -639,11 +701,11 @@ func updateCivoRegions(indexFile *IndexFile) error {
 		regionCodes = append(regionCodes, region.Code)
 	}
 
-	indexFile.CloudRegions["Civo"] = regionCodes
+	cloudsFile.CloudRegions["Civo"] = regionCodes
 	return nil
 }
 
-func updateCivoNodeTypes(indexFile *IndexFile) error {
+func updateCivoNodeTypes(cloudsFile *CloudsFile) error {
 	client, err := getCivoClient()
 	if err != nil {
 		return err
@@ -664,7 +726,7 @@ func updateCivoNodeTypes(indexFile *IndexFile) error {
 		})
 	}
 
-	indexFile.CloudNodeTypes["Civo"] = sizeInfos
+	cloudsFile.CloudNodeTypes["Civo"] = sizeInfos
 	return nil
 }
 
@@ -676,8 +738,8 @@ func getCloudProviderOptions() []huh.Option[string] {
 	return options
 }
 
-func getRegionOptions(cloudProvider string, indexFile IndexFile) []huh.Option[string] {
-	regions := indexFile.CloudRegions[cloudProvider]
+func getRegionOptions(cloudProvider string, cloudsFile CloudsFile) []huh.Option[string] {
+	regions := cloudsFile.CloudRegions[cloudProvider]
 	options := make([]huh.Option[string], len(regions))
 	for i, region := range regions {
 		options[i] = huh.Option[string]{Key: region, Value: region}
@@ -685,8 +747,8 @@ func getRegionOptions(cloudProvider string, indexFile IndexFile) []huh.Option[st
 	return options
 }
 
-func getNodeTypeOptions(cloudProvider string, indexFile IndexFile) []huh.Option[string] {
-	nodeTypes := indexFile.CloudNodeTypes[cloudProvider]
+func getNodeTypeOptions(cloudProvider string, cloudsFile CloudsFile) []huh.Option[string] {
+	nodeTypes := cloudsFile.CloudNodeTypes[cloudProvider]
 	options := make([]huh.Option[string], len(nodeTypes))
 	for i, nodeType := range nodeTypes {
 		displayName := fmt.Sprintf("%s (CPU Cores: %d, RAM: %d MB, Disk: %d GB)",
@@ -709,41 +771,94 @@ func loadIndexFile() (IndexFile, error) {
 	data, err := os.ReadFile(indexPath)
 	if err == nil {
 		// Parse HCL file
-		file, diags := hclwrite.ParseConfig(data, indexPath, hcl.Pos{Line: 1, Column: 1})
+		file, diags := hclsyntax.ParseConfig(data, indexPath, hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
 			return indexFile, fmt.Errorf("error parsing index.hcl: %s", diags)
 		}
 
 		// Extract data from HCL
-		body := file.Body()
-		versionAttr := body.GetAttribute("version")
-		if versionAttr != nil {
-			versionTokens := versionAttr.Expr().BuildTokens(nil)
-			if len(versionTokens) > 0 {
-				versionStr := string(versionTokens[0].Bytes)
-				indexFile.Version, _ = strconv.Atoi(versionStr)
+		content, _, diags := file.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{Name: "version"},
+				{Name: "last_updated"},
+			},
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "configs"},
+				{Type: "default_values"},
+			},
+		})
+		if diags.HasErrors() {
+			return indexFile, fmt.Errorf("error extracting content from index.hcl: %s", diags)
+		}
+
+		if attr, exists := content.Attributes["version"]; exists {
+			value, diags := attr.Expr.Value(nil)
+			if !diags.HasErrors() && value.Type() == cty.Number {
+				intValue, _ := value.AsBigFloat().Int64()
+				indexFile.Version = int(intValue)
 			}
 		}
-		// ... (implement parsing for other fields)
+
+		if attr, exists := content.Attributes["last_updated"]; exists {
+			value, diags := attr.Expr.Value(nil)
+			if !diags.HasErrors() {
+				indexFile.LastUpdated = value.AsString()
+			}
+		}
+
+		indexFile.Configs = make(map[string]Config)
+		for _, block := range content.Blocks {
+			if block.Type == "configs" {
+				configsContent, _, _ := block.Body.PartialContent(&hcl.BodySchema{
+					Blocks: []hcl.BlockHeaderSchema{
+						{Type: "*"},
+					},
+				})
+				for _, configBlock := range configsContent.Blocks {
+					configName := configBlock.Type
+					var config Config
+					configContent, _, _ := configBlock.Body.PartialContent(&hcl.BodySchema{
+						Attributes: []hcl.AttributeSchema{
+							{Name: "files"},
+						},
+					})
+					if attr, exists := configContent.Attributes["files"]; exists {
+						values, diags := attr.Expr.Value(nil)
+						if !diags.HasErrors() && values.CanIterateElements() {
+							it := values.ElementIterator()
+							for it.Next() {
+								_, value := it.Element()
+								config.Files = append(config.Files, value.AsString())
+							}
+						}
+					}
+					indexFile.Configs[configName] = config
+				}
+			} else if block.Type == "default_values" {
+				indexFile.DefaultValues = make(map[string]string)
+				content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+					Attributes: []hcl.AttributeSchema{
+						{Name: "*"},
+					},
+				})
+				if !diags.HasErrors() {
+					for name, attr := range content.Attributes {
+						value, diags := attr.Expr.Value(nil)
+						if !diags.HasErrors() {
+							indexFile.DefaultValues[name] = value.AsString()
+						}
+					}
+				}
+			}
+		}
 	} else if !os.IsNotExist(err) {
 		return indexFile, err
 	}
-	// Initialize maps if they don't exist
-	if indexFile.Configs == nil {
-		indexFile.Configs = make(map[string][]string)
-	}
-	if indexFile.DefaultValues == nil {
-		indexFile.DefaultValues = make(map[string]string)
-	}
-	if indexFile.CloudRegions == nil {
-		indexFile.CloudRegions = make(map[string][]string)
-	}
-	if indexFile.CloudNodeTypes == nil {
-		indexFile.CloudNodeTypes = make(map[string][]InstanceSizeInfo)
-	}
 
-	// Set the current version
-	indexFile.Version = 2
+	// Set the current version if not set
+	if indexFile.Version == 0 {
+		indexFile.Version = 2
+	}
 
 	return indexFile, nil
 }
@@ -751,23 +866,24 @@ func loadIndexFile() (IndexFile, error) {
 func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
 
+	// Backup existing index file
+	err := backupIndexFile(indexFile)
+	if err != nil {
+		return fmt.Errorf("error backing up index file: %w", err)
+	}
+
 	// Update LastUpdated
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
 
-	// Add the new configuration
+	// Add or update the new configuration
 	key := fmt.Sprintf("%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
-	indexFile.Configs[key] = []string{
-		filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "00-init.sh"),
-		filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "01-kubefirst-cloud.sh"),
-		filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), ".local.cloud.env"),
+	indexFile.Configs[key] = Config{
+		Files: []string{
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "00-init.sh"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "01-kubefirst-cloud.sh"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), ".local.cloud.env"),
+		},
 	}
-
-	// Ensure cloud-region and node-type are set in the index file
-	indexFile.DefaultValues["cloud-region"] = config.Region
-	indexFile.DefaultValues["node-type"] = config.Flags["node-type"]
-
-	// Set the current version
-	indexFile.Version = 2
 
 	// Create HCL file
 	f := hclwrite.NewEmptyFile()
@@ -781,7 +897,8 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	configsBlock := rootBody.AppendNewBlock("configs", nil)
 	configsBody := configsBlock.Body()
 	for k, v := range indexFile.Configs {
-		configsBody.SetAttributeValue(k, cty.ListVal(convertStringSliceToCtyValueSlice(v)))
+		configBlock := configsBody.AppendNewBlock(k, nil)
+		configBlock.Body().SetAttributeValue("files", cty.ListVal(convertStringSliceToCtyValueSlice(v.Files)))
 	}
 
 	// Write default_values
@@ -791,33 +908,30 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 		defaultValuesBody.SetAttributeValue(k, cty.StringVal(v))
 	}
 
-	// Write cloud_regions
-	cloudRegionsBlock := rootBody.AppendNewBlock("cloud_regions", nil)
-	cloudRegionsBody := cloudRegionsBlock.Body()
-	for k, v := range indexFile.CloudRegions {
-		cloudRegionsBody.SetAttributeValue(k, cty.ListVal(convertStringSliceToCtyValueSlice(v)))
-	}
-
-	// Write cloud_node_types
-	cloudNodeTypesBlock := rootBody.AppendNewBlock("cloud_node_types", nil)
-	cloudNodeTypesBody := cloudNodeTypesBlock.Body()
-	for k, v := range indexFile.CloudNodeTypes {
-		nodeTypeValues := make([]cty.Value, len(v))
-		for i, nodeType := range v {
-			nodeTypeValues[i] = cty.ObjectVal(map[string]cty.Value{
-				"name":           cty.StringVal(nodeType.Name),
-				"cpu_cores":      cty.NumberIntVal(int64(nodeType.CPUCores)),
-				"ram_megabytes":  cty.NumberIntVal(int64(nodeType.RAMMegabytes)),
-				"disk_gigabytes": cty.NumberIntVal(int64(nodeType.DiskGigabytes)),
-			})
-		}
-		cloudNodeTypesBody.SetAttributeValue(k, cty.ListVal(nodeTypeValues))
-	}
-
 	// Write the updated index file
-	err := os.WriteFile(indexPath, f.Bytes(), 0644)
+	err = os.WriteFile(indexPath, f.Bytes(), 0644)
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func backupIndexFile(indexFile IndexFile) error {
+	sourceFile := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
+	cacheDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", ".cache")
+
+	err := os.MkdirAll(cacheDir, 0755)
+	if err != nil {
+		return fmt.Errorf("error creating cache directory: %w", err)
+	}
+
+	backupFileName := fmt.Sprintf("index_%s.hcl", indexFile.LastUpdated)
+	backupFile := filepath.Join(cacheDir, backupFileName)
+
+	err = os.Rename(sourceFile, backupFile)
+	if err != nil {
+		return fmt.Errorf("error backing up index file: %w", err)
 	}
 
 	return nil
@@ -858,7 +972,7 @@ func getDigitalOceanSizes() ([]string, error) {
 	return sizeSlugs, nil
 }
 
-func updateDigitalOceanNodeTypes(indexFile *IndexFile) error {
+func updateDigitalOceanNodeTypes(cloudsFile *CloudsFile) error {
 	sizes, err := getDigitalOceanSizes()
 	if err != nil {
 		return err
@@ -875,7 +989,7 @@ func updateDigitalOceanNodeTypes(indexFile *IndexFile) error {
 		})
 	}
 
-	indexFile.CloudNodeTypes["DigitalOcean"] = sizeInfos
+	cloudsFile.CloudNodeTypes["DigitalOcean"] = sizeInfos
 	return nil
 }
 
@@ -900,7 +1014,7 @@ func parseDigitalOceanSize(size string) (cpuCores, ramMB, diskGB int) {
 	return cpuCores, ramMB, diskGB
 }
 
-func updateDigitalOceanRegions(indexFile *IndexFile) error {
+func updateDigitalOceanRegions(cloudsFile *CloudsFile) error {
 	token := os.Getenv("DIGITALOCEAN_TOKEN")
 	if token == "" {
 		return fmt.Errorf("DIGITALOCEAN_TOKEN not found in environment. Please set it and try again")
@@ -924,7 +1038,7 @@ func updateDigitalOceanRegions(indexFile *IndexFile) error {
 		regionSlugs = append(regionSlugs, region.Slug)
 	}
 
-	indexFile.CloudRegions["DigitalOcean"] = regionSlugs
+	cloudsFile.CloudRegions["DigitalOcean"] = regionSlugs
 	return nil
 }
 
@@ -1139,4 +1253,170 @@ func handleKubefirstSetup() {
 	} else {
 		fmt.Println("Kubefirst setup completed successfully!")
 	}
+}
+
+func updateCloudsFile(cloudConfig CloudConfig, cloudsFile CloudsFile) error {
+	cloudsPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "clouds.hcl")
+
+	// Update cloud regions
+	if _, exists := cloudsFile.CloudRegions[cloudConfig.CloudPrefix]; !exists {
+		cloudsFile.CloudRegions[cloudConfig.CloudPrefix] = []string{}
+	}
+	if !contains(cloudsFile.CloudRegions[cloudConfig.CloudPrefix], cloudConfig.Region) {
+		cloudsFile.CloudRegions[cloudConfig.CloudPrefix] = append(
+			cloudsFile.CloudRegions[cloudConfig.CloudPrefix],
+			cloudConfig.Region,
+		)
+	}
+
+	// Create HCL file
+	f := hclwrite.NewEmptyFile()
+	rootBody := f.Body()
+
+	// Write last_updated
+	rootBody.SetAttributeValue("last_updated", cty.StringVal(time.Now().UTC().Format(time.RFC3339)))
+
+	// Write cloud_regions
+	cloudRegionsBlock := rootBody.AppendNewBlock("cloud_regions", nil)
+	cloudRegionsBody := cloudRegionsBlock.Body()
+	for k, v := range cloudsFile.CloudRegions {
+		cloudRegionsBody.SetAttributeValue(k, cty.ListVal(convertStringSliceToCtyValueSlice(v)))
+	}
+
+	// Write cloud_node_types
+	cloudNodeTypesBlock := rootBody.AppendNewBlock("cloud_node_types", nil)
+	cloudNodeTypesBody := cloudNodeTypesBlock.Body()
+	for k, v := range cloudsFile.CloudNodeTypes {
+		nodeTypeValues := make([]cty.Value, len(v))
+		for i, nodeType := range v {
+			nodeTypeValues[i] = cty.ObjectVal(map[string]cty.Value{
+				"name":           cty.StringVal(nodeType.Name),
+				"cpu_cores":      cty.NumberIntVal(int64(nodeType.CPUCores)),
+				"ram_megabytes":  cty.NumberIntVal(int64(nodeType.RAMMegabytes)),
+				"disk_gigabytes": cty.NumberIntVal(int64(nodeType.DiskGigabytes)),
+			})
+		}
+		cloudNodeTypesBody.SetAttributeValue(k, cty.ListVal(nodeTypeValues))
+	}
+
+	// Write the updated clouds file
+	err := os.WriteFile(cloudsPath, f.Bytes(), 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func loadCloudsFile() (CloudsFile, error) {
+	cloudsPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "clouds.hcl")
+	var cloudsFile CloudsFile
+
+	data, err := os.ReadFile(cloudsPath)
+	if err == nil {
+		// Parse HCL file
+		file, diags := hclsyntax.ParseConfig(data, cloudsPath, hcl.Pos{Line: 1, Column: 1})
+		if diags.HasErrors() {
+			return cloudsFile, fmt.Errorf("error parsing clouds.hcl: %s", diags)
+		}
+
+		// Extract data from HCL
+		content, _, diags := file.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{Name: "last_updated"},
+			},
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "cloud_regions"},
+				{Type: "cloud_node_types"},
+			},
+		})
+		if diags.HasErrors() {
+			return cloudsFile, fmt.Errorf("error extracting content from clouds.hcl: %s", diags)
+		}
+
+		if attr, exists := content.Attributes["last_updated"]; exists {
+			value, diags := attr.Expr.Value(nil)
+			if !diags.HasErrors() {
+				cloudsFile.LastUpdated = value.AsString()
+			}
+		}
+
+		cloudsFile.CloudRegions = make(map[string][]string)
+		cloudsFile.CloudNodeTypes = make(map[string][]InstanceSizeInfo)
+
+		for _, block := range content.Blocks {
+			switch block.Type {
+			case "cloud_regions":
+				content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+					Attributes: []hcl.AttributeSchema{
+						{Name: "*"},
+					},
+				})
+				if !diags.HasErrors() {
+					for name, attr := range content.Attributes {
+						values, diags := attr.Expr.Value(nil)
+						if !diags.HasErrors() && values.CanIterateElements() {
+							var regions []string
+							it := values.ElementIterator()
+							for it.Next() {
+								_, value := it.Element()
+								regions = append(regions, value.AsString())
+							}
+							cloudsFile.CloudRegions[name] = regions
+						}
+					}
+				}
+			case "cloud_node_types":
+				content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+					Attributes: []hcl.AttributeSchema{
+						{Name: "*"},
+					},
+				})
+				if !diags.HasErrors() {
+					for name, attr := range content.Attributes {
+						values, diags := attr.Expr.Value(nil)
+						if !diags.HasErrors() && values.CanIterateElements() {
+							var nodeTypes []InstanceSizeInfo
+							it := values.ElementIterator()
+							for it.Next() {
+								_, value := it.Element()
+								if value.Type().IsObjectType() {
+									var nodeType InstanceSizeInfo
+									nodeType.Name = value.GetAttr("name").AsString()
+									cpuCores, _ := value.GetAttr("cpu_cores").AsBigFloat().Int64()
+									nodeType.CPUCores = int(cpuCores)
+									ramMB, _ := value.GetAttr("ram_megabytes").AsBigFloat().Int64()
+									nodeType.RAMMegabytes = int(ramMB)
+									diskGB, _ := value.GetAttr("disk_gigabytes").AsBigFloat().Int64()
+									nodeType.DiskGigabytes = int(diskGB)
+									nodeTypes = append(nodeTypes, nodeType)
+								}
+							}
+							cloudsFile.CloudNodeTypes[name] = nodeTypes
+						}
+					}
+				}
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return cloudsFile, err
+	}
+
+	if cloudsFile.CloudRegions == nil {
+		cloudsFile.CloudRegions = make(map[string][]string)
+	}
+	if cloudsFile.CloudNodeTypes == nil {
+		cloudsFile.CloudNodeTypes = make(map[string][]InstanceSizeInfo)
+	}
+
+	return cloudsFile, nil
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
