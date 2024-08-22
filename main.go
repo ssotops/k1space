@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+  "time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -46,6 +47,7 @@ type InstanceSizeInfo struct {
 
 type IndexFile struct {
 	Version        int                           `hcl:"version"`
+	LastUpdated    string                        `hcl:"last_updated"`
 	Configs        map[string][]string           `hcl:"configs"`
 	DefaultValues  map[string]string             `hcl:"default_values"`
 	CloudRegions   map[string][]string           `hcl:"cloud_regions"`
@@ -84,6 +86,8 @@ func main() {
 			runConfigMenu()
 		case "Kubefirst":
 			runKubefirstMenu()
+		case "Provision Cluster":
+			provisionCluster()
 		case "Exit":
 			fmt.Println("Exiting k1space. Goodbye!")
 			return
@@ -100,6 +104,7 @@ func runMainMenu() string {
 				Options(
 					huh.NewOption("Config", "Config"),
 					huh.NewOption("Kubefirst", "Kubefirst"),
+					huh.NewOption("Provision Cluster", "Provision Cluster"),
 					huh.NewOption("Exit", "Exit"),
 				).
 				Value(&selected),
@@ -168,6 +173,118 @@ func runKubefirstMenu() {
 		if !continueAction {
 			return
 		}
+	}
+}
+
+func provisionCluster() {
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		log.Error("Error loading index file", "error", err)
+		return
+	}
+
+	// List available configs
+	var selectedConfig string
+	configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
+	for config := range indexFile.Configs {
+		configOptions = append(configOptions, huh.NewOption(config, config))
+	}
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a configuration").
+				Options(configOptions...).
+				Value(&selectedConfig),
+		),
+	)
+
+	err = form.Run()
+	if err != nil {
+		log.Error("Error selecting configuration", "error", err)
+		return
+	}
+
+	// Display files in selected config
+	files := indexFile.Configs[selectedConfig]
+	var selectedFile string
+	fileOptions := make([]huh.Option[string], 0, len(files))
+	for _, file := range files {
+		fileOptions = append(fileOptions, huh.NewOption(filepath.Base(file), file))
+	}
+
+	form = huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a file").
+				Options(fileOptions...).
+				Value(&selectedFile),
+		),
+	)
+
+	err = form.Run()
+	if err != nil {
+		log.Error("Error selecting file", "error", err)
+		return
+	}
+
+	// Read and display file contents
+	content, err := os.ReadFile(selectedFile)
+	if err != nil {
+		log.Error("Error reading file", "error", err)
+		return
+	}
+
+	fmt.Printf("Contents of %s:\n\n%s\n\n", filepath.Base(selectedFile), string(content))
+
+	// Prompt user to run 00-init.sh
+	var confirmRun bool
+	form = huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Do you want to run 00-init.sh to provision the cluster?").
+				Value(&confirmRun),
+		),
+	)
+
+	err = form.Run()
+	if err != nil {
+		log.Error("Error in confirmation prompt", "error", err)
+		return
+	}
+
+	if confirmRun {
+		// Summarize the provision cluster process
+		fmt.Println("\nProvisioning Cluster Summary:")
+		fmt.Printf("- Configuration: %s\n", selectedConfig)
+		fmt.Printf("- Init Script: %s\n", filepath.Join(filepath.Dir(selectedFile), "00-init.sh"))
+		fmt.Printf("- Kubefirst Script: %s\n", filepath.Join(filepath.Dir(selectedFile), "01-kubefirst-cloud.sh"))
+		fmt.Printf("- Environment File: %s\n", filepath.Join(filepath.Dir(selectedFile), ".local.cloud.env"))
+
+		// Final confirmation
+		var finalConfirm bool
+		form = huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Do you want to proceed with provisioning the cluster?").
+					Value(&finalConfirm),
+			),
+		)
+
+		err = form.Run()
+		if err != nil {
+			log.Error("Error in final confirmation prompt", "error", err)
+			return
+		}
+
+		if finalConfirm {
+			fmt.Println("Provisioning cluster...")
+			// Add logic here to run 00-init.sh
+		} else {
+			fmt.Println("Cluster provisioning cancelled.")
+		}
+	} else {
+		fmt.Println("Cluster provisioning cancelled.")
 	}
 }
 
@@ -482,7 +599,7 @@ func createConfig() {
 	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))
 	fmt.Println()
 
-	fmt.Printf("☁️  Cloud Provider: %s\n", config.CloudPrefix)
+	fmt.Printf("☁️ Cloud Provider: %s\n", config.CloudPrefix)
 	fmt.Printf("🌎 Region: %s\n", config.Region)
 	fmt.Printf("💻 Node Type: %s\n", selectedNodeType)
 
@@ -634,6 +751,9 @@ func loadIndexFile() (IndexFile, error) {
 func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
 
+	// Update LastUpdated
+	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
+
 	// Add the new configuration
 	key := fmt.Sprintf("%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 	indexFile.Configs[key] = []string{
@@ -653,8 +773,9 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	f := hclwrite.NewEmptyFile()
 	rootBody := f.Body()
 
-	// Write version
+	// Write version and last_updated
 	rootBody.SetAttributeValue("version", cty.NumberIntVal(int64(indexFile.Version)))
+	rootBody.SetAttributeValue("last_updated", cty.StringVal(indexFile.LastUpdated))
 
 	// Write configs
 	configsBlock := rootBody.AppendNewBlock("configs", nil)
