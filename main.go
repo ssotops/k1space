@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +14,9 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/civo/civogo"
 	"github.com/digitalocean/godo"
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclwrite"
+	"github.com/zclconf/go-cty/cty"
 )
 
 var (
@@ -42,12 +44,12 @@ type InstanceSizeInfo struct {
 	DiskGigabytes int
 }
 
-type Lockfile struct {
-	Version        int                           `json:"version"`
-	Configs        map[string][]string           `json:"configs"`
-	DefaultValues  map[string]string             `json:"defaultValues"`
-	CloudRegions   map[string][]string           `json:"cloudRegions"`
-	CloudNodeTypes map[string][]InstanceSizeInfo `json:"cloudNodeTypes"`
+type IndexFile struct {
+	Version        int                           `hcl:"version"`
+	Configs        map[string][]string           `hcl:"configs"`
+	DefaultValues  map[string]string             `hcl:"default_values"`
+	CloudRegions   map[string][]string           `hcl:"cloud_regions"`
+	CloudNodeTypes map[string][]InstanceSizeInfo `hcl:"cloud_node_types"`
 }
 
 var cloudProviders = []string{
@@ -329,9 +331,9 @@ func createConfig() {
 		Flags: make(map[string]string),
 	}
 
-	lockfile, err := loadLockfile()
+	indexFile, err := loadIndexFile()
 	if err != nil {
-		log.Error("Error loading lockfile", "error", err)
+		log.Error("Error loading index file", "error", err)
 		return
 	}
 
@@ -357,23 +359,23 @@ func createConfig() {
 	}
 
 	if config.CloudPrefix == "DigitalOcean" {
-		err = updateDigitalOceanRegions(&lockfile)
+		err = updateDigitalOceanRegions(&indexFile)
 		if err != nil {
 			log.Error("Error updating DigitalOcean regions", "error", err)
 			return
 		}
-		err = updateDigitalOceanNodeTypes(&lockfile)
+		err = updateDigitalOceanNodeTypes(&indexFile)
 		if err != nil {
 			log.Error("Error updating DigitalOcean node types", "error", err)
 			return
 		}
 	} else if config.CloudPrefix == "Civo" {
-		err = updateCivoRegions(&lockfile)
+		err = updateCivoRegions(&indexFile)
 		if err != nil {
 			log.Error("Error updating Civo regions", "error", err)
 			return
 		}
-		err = updateCivoNodeTypes(&lockfile)
+		err = updateCivoNodeTypes(&indexFile)
 		if err != nil {
 			log.Error("Error updating Civo node types", "error", err)
 			return
@@ -384,7 +386,7 @@ func createConfig() {
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select region").
-				Options(getRegionOptions(config.CloudPrefix, lockfile)...).
+				Options(getRegionOptions(config.CloudPrefix, indexFile)...).
 				Value(&config.Region),
 		),
 	)
@@ -408,7 +410,7 @@ func createConfig() {
 			continue // Skip cloud-region and node-type as we've already set them
 		}
 
-		defaultValue := lockfile.DefaultValues[flag]
+		defaultValue := indexFile.DefaultValues[flag]
 		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
 		flagInputs = append(flagInputs, flagInput)
 		flagGroups = append(flagGroups,
@@ -424,7 +426,7 @@ func createConfig() {
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select node type").
-				Options(getNodeTypeOptions(config.CloudPrefix, lockfile)...).
+				Options(getNodeTypeOptions(config.CloudPrefix, indexFile)...).
 				Value(&selectedNodeType),
 		),
 	)
@@ -451,15 +453,15 @@ func createConfig() {
 		return
 	}
 
-	// Update config.Flags and lockfile.DefaultValues with the collected values
+	// Update config.Flags and indexFile.DefaultValues with the collected values
 	for _, fi := range flagInputs {
 		config.Flags[fi.Name] = fi.Value
-		lockfile.DefaultValues[fi.Name] = fi.Value
+		indexFile.DefaultValues[fi.Name] = fi.Value
 	}
 
-	// Ensure cloud-region and node-type is set in the lockfile
-	lockfile.DefaultValues["cloud-region"] = config.Region
-	lockfile.DefaultValues["node-type"] = selectedNodeType
+	// Ensure cloud-region and node-type is set in the indexFile
+	indexFile.DefaultValues["cloud-region"] = config.Region
+	indexFile.DefaultValues["node-type"] = selectedNodeType
 
 	err = generateFiles(config)
 	if err != nil {
@@ -467,14 +469,14 @@ func createConfig() {
 		return
 	}
 
-	err = updateLockfile(config, lockfile)
+	err = updateIndexFile(config, indexFile)
 	if err != nil {
-		log.Error("Error updating lockfile", "error", err)
+		log.Error("Error updating index file", "error", err)
 		return
 	}
 
 	// Define baseDir
-	baseDir := filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 
 	// Pretty-print the summary
 	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))
@@ -504,7 +506,7 @@ func getCivoClient() (*civogo.Client, error) {
 	return civogo.NewClient(token, "")
 }
 
-func updateCivoRegions(lockfile *Lockfile) error {
+func updateCivoRegions(indexFile *IndexFile) error {
 	client, err := getCivoClient()
 	if err != nil {
 		return err
@@ -520,11 +522,11 @@ func updateCivoRegions(lockfile *Lockfile) error {
 		regionCodes = append(regionCodes, region.Code)
 	}
 
-	lockfile.CloudRegions["Civo"] = regionCodes
+	indexFile.CloudRegions["Civo"] = regionCodes
 	return nil
 }
 
-func updateCivoNodeTypes(lockfile *Lockfile) error {
+func updateCivoNodeTypes(indexFile *IndexFile) error {
 	client, err := getCivoClient()
 	if err != nil {
 		return err
@@ -545,7 +547,7 @@ func updateCivoNodeTypes(lockfile *Lockfile) error {
 		})
 	}
 
-	lockfile.CloudNodeTypes["Civo"] = sizeInfos
+	indexFile.CloudNodeTypes["Civo"] = sizeInfos
 	return nil
 }
 
@@ -557,8 +559,8 @@ func getCloudProviderOptions() []huh.Option[string] {
 	return options
 }
 
-func getRegionOptions(cloudProvider string, lockfile Lockfile) []huh.Option[string] {
-	regions := lockfile.CloudRegions[cloudProvider]
+func getRegionOptions(cloudProvider string, indexFile IndexFile) []huh.Option[string] {
+	regions := indexFile.CloudRegions[cloudProvider]
 	options := make([]huh.Option[string], len(regions))
 	for i, region := range regions {
 		options[i] = huh.Option[string]{Key: region, Value: region}
@@ -566,8 +568,8 @@ func getRegionOptions(cloudProvider string, lockfile Lockfile) []huh.Option[stri
 	return options
 }
 
-func getNodeTypeOptions(cloudProvider string, lockfile Lockfile) []huh.Option[string] {
-	nodeTypes := lockfile.CloudNodeTypes[cloudProvider]
+func getNodeTypeOptions(cloudProvider string, indexFile IndexFile) []huh.Option[string] {
+	nodeTypes := indexFile.CloudNodeTypes[cloudProvider]
 	options := make([]huh.Option[string], len(nodeTypes))
 	for i, nodeType := range nodeTypes {
 		displayName := fmt.Sprintf("%s (CPU Cores: %d, RAM: %d MB, Disk: %d GB)",
@@ -583,66 +585,129 @@ func getNodeTypeOptions(cloudProvider string, lockfile Lockfile) []huh.Option[st
 	return options
 }
 
-func loadLockfile() (Lockfile, error) {
-	lockfilePath := filepath.Join(os.Getenv("HOME"), ".k1space", "k1.locked.json")
-	var lockfile Lockfile
+func loadIndexFile() (IndexFile, error) {
+	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
+	var indexFile IndexFile
 
-	data, err := os.ReadFile(lockfilePath)
+	data, err := os.ReadFile(indexPath)
 	if err == nil {
-		var tempMap map[string]interface{}
-		err = json.Unmarshal(data, &tempMap)
-		if err != nil {
-			return lockfile, err
+		// Parse HCL file
+		file, diags := hclwrite.ParseConfig(data, indexPath, hcl.Pos{Line: 1, Column: 1})
+		if diags.HasErrors() {
+			return indexFile, fmt.Errorf("error parsing index.hcl: %s", diags)
 		}
 
-		version, ok := tempMap["version"].(float64)
-		if !ok || version < 2 {
-			// Old version or no version, migrate data
-			err = json.Unmarshal(data, &struct {
-				Configs        map[string][]string `json:"configs"`
-				DefaultValues  map[string]string   `json:"defaultValues"`
-				CloudRegions   map[string][]string `json:"cloudRegions"`
-				CloudNodeTypes map[string][]string `json:"cloudNodeTypes"`
-			}{
-				Configs:        lockfile.Configs,
-				DefaultValues:  lockfile.DefaultValues,
-				CloudRegions:   lockfile.CloudRegions,
-				CloudNodeTypes: make(map[string][]string),
-			})
-			if err != nil {
-				return lockfile, err
-			}
-			// Convert old CloudNodeTypes to new format
-			lockfile.CloudNodeTypes = make(map[string][]InstanceSizeInfo)
-		} else {
-			// Current version, unmarshal directly
-			err = json.Unmarshal(data, &lockfile)
-			if err != nil {
-				return lockfile, err
+		// Extract data from HCL
+		body := file.Body()
+		versionAttr := body.GetAttribute("version")
+		if versionAttr != nil {
+			versionTokens := versionAttr.Expr().BuildTokens(nil)
+			if len(versionTokens) > 0 {
+				versionStr := string(versionTokens[0].Bytes)
+				indexFile.Version, _ = strconv.Atoi(versionStr)
 			}
 		}
+		// ... (implement parsing for other fields)
 	} else if !os.IsNotExist(err) {
-		return lockfile, err
+		return indexFile, err
 	}
-
 	// Initialize maps if they don't exist
-	if lockfile.Configs == nil {
-		lockfile.Configs = make(map[string][]string)
+	if indexFile.Configs == nil {
+		indexFile.Configs = make(map[string][]string)
 	}
-	if lockfile.DefaultValues == nil {
-		lockfile.DefaultValues = make(map[string]string)
+	if indexFile.DefaultValues == nil {
+		indexFile.DefaultValues = make(map[string]string)
 	}
-	if lockfile.CloudRegions == nil {
-		lockfile.CloudRegions = make(map[string][]string)
+	if indexFile.CloudRegions == nil {
+		indexFile.CloudRegions = make(map[string][]string)
 	}
-	if lockfile.CloudNodeTypes == nil {
-		lockfile.CloudNodeTypes = make(map[string][]InstanceSizeInfo)
+	if indexFile.CloudNodeTypes == nil {
+		indexFile.CloudNodeTypes = make(map[string][]InstanceSizeInfo)
 	}
 
 	// Set the current version
-	lockfile.Version = 2
+	indexFile.Version = 2
 
-	return lockfile, nil
+	return indexFile, nil
+}
+
+func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
+	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
+
+	// Add the new configuration
+	key := fmt.Sprintf("%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
+	indexFile.Configs[key] = []string{
+		filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "00-init.sh"),
+		filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "01-kubefirst-cloud.sh"),
+		filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), ".local.cloud.env"),
+	}
+
+	// Ensure cloud-region and node-type are set in the index file
+	indexFile.DefaultValues["cloud-region"] = config.Region
+	indexFile.DefaultValues["node-type"] = config.Flags["node-type"]
+
+	// Set the current version
+	indexFile.Version = 2
+
+	// Create HCL file
+	f := hclwrite.NewEmptyFile()
+	rootBody := f.Body()
+
+	// Write version
+	rootBody.SetAttributeValue("version", cty.NumberIntVal(int64(indexFile.Version)))
+
+	// Write configs
+	configsBlock := rootBody.AppendNewBlock("configs", nil)
+	configsBody := configsBlock.Body()
+	for k, v := range indexFile.Configs {
+		configsBody.SetAttributeValue(k, cty.ListVal(convertStringSliceToCtyValueSlice(v)))
+	}
+
+	// Write default_values
+	defaultValuesBlock := rootBody.AppendNewBlock("default_values", nil)
+	defaultValuesBody := defaultValuesBlock.Body()
+	for k, v := range indexFile.DefaultValues {
+		defaultValuesBody.SetAttributeValue(k, cty.StringVal(v))
+	}
+
+	// Write cloud_regions
+	cloudRegionsBlock := rootBody.AppendNewBlock("cloud_regions", nil)
+	cloudRegionsBody := cloudRegionsBlock.Body()
+	for k, v := range indexFile.CloudRegions {
+		cloudRegionsBody.SetAttributeValue(k, cty.ListVal(convertStringSliceToCtyValueSlice(v)))
+	}
+
+	// Write cloud_node_types
+	cloudNodeTypesBlock := rootBody.AppendNewBlock("cloud_node_types", nil)
+	cloudNodeTypesBody := cloudNodeTypesBlock.Body()
+	for k, v := range indexFile.CloudNodeTypes {
+		nodeTypeValues := make([]cty.Value, len(v))
+		for i, nodeType := range v {
+			nodeTypeValues[i] = cty.ObjectVal(map[string]cty.Value{
+				"name":           cty.StringVal(nodeType.Name),
+				"cpu_cores":      cty.NumberIntVal(int64(nodeType.CPUCores)),
+				"ram_megabytes":  cty.NumberIntVal(int64(nodeType.RAMMegabytes)),
+				"disk_gigabytes": cty.NumberIntVal(int64(nodeType.DiskGigabytes)),
+			})
+		}
+		cloudNodeTypesBody.SetAttributeValue(k, cty.ListVal(nodeTypeValues))
+	}
+
+	// Write the updated index file
+	err := os.WriteFile(indexPath, f.Bytes(), 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func convertStringSliceToCtyValueSlice(slice []string) []cty.Value {
+	values := make([]cty.Value, len(slice))
+	for i, s := range slice {
+		values[i] = cty.StringVal(s)
+	}
+	return values
 }
 
 func getDigitalOceanSizes() ([]string, error) {
@@ -672,7 +737,7 @@ func getDigitalOceanSizes() ([]string, error) {
 	return sizeSlugs, nil
 }
 
-func updateDigitalOceanNodeTypes(lockfile *Lockfile) error {
+func updateDigitalOceanNodeTypes(indexFile *IndexFile) error {
 	sizes, err := getDigitalOceanSizes()
 	if err != nil {
 		return err
@@ -689,7 +754,7 @@ func updateDigitalOceanNodeTypes(lockfile *Lockfile) error {
 		})
 	}
 
-	lockfile.CloudNodeTypes["DigitalOcean"] = sizeInfos
+	indexFile.CloudNodeTypes["DigitalOcean"] = sizeInfos
 	return nil
 }
 
@@ -714,7 +779,7 @@ func parseDigitalOceanSize(size string) (cpuCores, ramMB, diskGB int) {
 	return cpuCores, ramMB, diskGB
 }
 
-func updateDigitalOceanRegions(lockfile *Lockfile) error {
+func updateDigitalOceanRegions(indexFile *IndexFile) error {
 	token := os.Getenv("DIGITALOCEAN_TOKEN")
 	if token == "" {
 		return fmt.Errorf("DIGITALOCEAN_TOKEN not found in environment. Please set it and try again")
@@ -738,12 +803,12 @@ func updateDigitalOceanRegions(lockfile *Lockfile) error {
 		regionSlugs = append(regionSlugs, region.Slug)
 	}
 
-	lockfile.CloudRegions["DigitalOcean"] = regionSlugs
+	indexFile.CloudRegions["DigitalOcean"] = regionSlugs
 	return nil
 }
 
 func generateFiles(config CloudConfig) error {
-	baseDir := filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 	err := os.MkdirAll(baseDir, 0755)
 	if err != nil {
 		return err
@@ -798,33 +863,6 @@ func generateKubefirstContent(config CloudConfig) string {
 	}
 
 	return content.String()
-}
-
-func updateLockfile(config CloudConfig, lockfile Lockfile) error {
-	lockfilePath := filepath.Join(os.Getenv("HOME"), ".k1space", "k1.locked.json")
-
-	// Add the new configuration
-	key := fmt.Sprintf("%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
-	lockfile.Configs[key] = []string{
-		filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "00-init.sh"),
-		filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "01-kubefirst-cloud.sh"),
-		filepath.Join(os.Getenv("HOME"), ".k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), ".local.cloud.env"),
-	}
-
-	// Ensure cloud-region and node-type are set in the lockfile
-	lockfile.DefaultValues["cloud-region"] = config.Region
-	lockfile.DefaultValues["node-type"] = config.Flags["node-type"]
-
-	// Set the current version
-	lockfile.Version = 2
-
-	// Write the updated lockfile
-	data, err := json.MarshalIndent(lockfile, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(lockfilePath, data, 0644)
 }
 
 func setupConsoleEnvironment() error {
