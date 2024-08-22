@@ -88,6 +88,7 @@ var cloudFlags = map[string][]string{
 func main() {
 	log.SetOutput(os.Stderr)
 
+  initializeAndCleanup()
 	for {
 		action := runMainMenu()
 		switch action {
@@ -234,7 +235,10 @@ func provisionCluster() {
 	var selectedFile string
 	fileOptions := make([]huh.Option[string], 0, len(files))
 	for _, file := range files {
-		fileOptions = append(fileOptions, huh.NewOption(filepath.Base(file), file))
+		// Remove any surrounding quotes and use only the base filename
+		cleanFile := strings.Trim(file, "\"")
+		baseFile := filepath.Base(cleanFile)
+		fileOptions = append(fileOptions, huh.NewOption(baseFile, cleanFile))
 	}
 
 	log.Info("Presenting file selection to user", "optionCount", len(fileOptions))
@@ -255,7 +259,7 @@ func provisionCluster() {
 	log.Info("User selected file", "selectedFile", selectedFile)
 
 	// Read and display file contents
-	content, err := os.ReadFile(selectedFile)
+	content, err := os.ReadFile(filepath.Clean(selectedFile))
 	if err != nil {
 		log.Error("Error reading file", "error", err)
 		return
@@ -807,12 +811,6 @@ func loadIndexFile() (IndexFile, error) {
 func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
 
-	// Backup existing index file
-	err := backupIndexFile(indexFile)
-	if err != nil {
-		return fmt.Errorf("error backing up index file: %w", err)
-	}
-
 	// Update LastUpdated
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
 
@@ -839,7 +837,12 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	configsBody := configsBlock.Body()
 	for k, v := range indexFile.Configs {
 		configBlock := configsBody.AppendNewBlock(k, nil)
-		configBlock.Body().SetAttributeValue("files", cty.ListVal(convertStringSliceToCtyValueSlice(v.Files)))
+		fileValues := make([]cty.Value, len(v.Files))
+		for i, file := range v.Files {
+			// Use filepath.ToSlash to ensure consistent forward slashes
+			fileValues[i] = cty.StringVal(filepath.ToSlash(file))
+		}
+		configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
 	}
 
 	// Write default_values
@@ -850,7 +853,7 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	}
 
 	// Write the updated index file
-	err = os.WriteFile(indexPath, f.Bytes(), 0644)
+	err := os.WriteFile(indexPath, f.Bytes(), 0644)
 	if err != nil {
 		return err
 	}
@@ -1402,4 +1405,27 @@ func simpleHCLParser(content string) map[string][]string {
 		}
 	}
 	return configs
+}
+
+func cleanupIndexFile(indexFile *IndexFile) {
+    for configName, config := range indexFile.Configs {
+        cleanedFiles := make([]string, len(config.Files))
+        for i, file := range config.Files {
+            // Remove extra quotes and backslashes
+            cleaned := strings.Trim(file, "\"\\")
+            // Ensure forward slashes
+            cleaned = filepath.ToSlash(cleaned)
+            cleanedFiles[i] = cleaned
+        }
+        indexFile.Configs[configName] = Config{Files: cleanedFiles}
+    }
+}
+
+func initializeAndCleanup() error {
+    indexFile, err := loadIndexFile()
+    if err != nil {
+        return err
+    }
+    cleanupIndexFile(&indexFile)
+    return updateIndexFile(CloudConfig{}, indexFile)
 }
