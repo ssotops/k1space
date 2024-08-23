@@ -87,8 +87,9 @@ var cloudFlags = map[string][]string{
 
 func main() {
 	log.SetOutput(os.Stderr)
+	printIntro()
 
-  initializeAndCleanup()
+	initializeAndCleanup()
 	for {
 		action := runMainMenu()
 		switch action {
@@ -1408,24 +1409,66 @@ func simpleHCLParser(content string) map[string][]string {
 }
 
 func cleanupIndexFile(indexFile *IndexFile) {
-    for configName, config := range indexFile.Configs {
-        cleanedFiles := make([]string, len(config.Files))
-        for i, file := range config.Files {
-            // Remove extra quotes and backslashes
-            cleaned := strings.Trim(file, "\"\\")
-            // Ensure forward slashes
-            cleaned = filepath.ToSlash(cleaned)
-            cleanedFiles[i] = cleaned
-        }
-        indexFile.Configs[configName] = Config{Files: cleanedFiles}
-    }
+	for configName, config := range indexFile.Configs {
+		cleanedFiles := make([]string, len(config.Files))
+		for i, file := range config.Files {
+			// Remove extra quotes and backslashes
+			cleaned := strings.Trim(file, "\"\\")
+			// Ensure forward slashes
+			cleaned = filepath.ToSlash(cleaned)
+			cleanedFiles[i] = cleaned
+		}
+		indexFile.Configs[configName] = Config{Files: cleanedFiles}
+	}
 }
 
 func initializeAndCleanup() error {
-    indexFile, err := loadIndexFile()
-    if err != nil {
-        return err
-    }
-    cleanupIndexFile(&indexFile)
-    return updateIndexFile(CloudConfig{}, indexFile)
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		return err
+	}
+	cleanupIndexFile(&indexFile)
+	return updateIndexFile(CloudConfig{}, indexFile)
+}
+
+func getVersion() string {
+	// Try to get the GitHub release version
+	cmd := exec.Command("git", "describe", "--tags", "--abbrev=0")
+	output, err := cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(output))
+	}
+
+	// If not available, try to get the last commit hash
+	cmd = exec.Command("git", "rev-parse", "--short", "HEAD")
+	output, err = cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(output))
+	}
+
+	// If neither is available, return "unknown"
+	return "unknown"
+}
+
+func printIntro() {
+	// Create styles
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4")).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Padding(1, 3)
+
+	versionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#7D56F4")).
+		Padding(0, 1)
+
+	// Create the title and version strings
+	title := titleStyle.Render("k1space")
+	version := versionStyle.Render("v" + getVersion())
+
+	// Combine and print
+	fmt.Println(lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", version))
+	fmt.Println()
 }
