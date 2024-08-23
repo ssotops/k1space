@@ -54,7 +54,7 @@ func publishRelease(ctx context.Context) error {
 	}
 
 	for _, arch := range architectures {
-		binaryName := fmt.Sprintf("gitspace_%s_%s", arch.goos, arch.goarch)
+		binaryName := fmt.Sprintf("k1space_%s_%s", arch.goos, arch.goarch)
 		if arch.goos == "windows" {
 			binaryName += ".exe"
 		}
@@ -111,7 +111,7 @@ func determineNewVersion(ctx context.Context) (string, error) {
 	client := github.NewClient(tc)
 
 	// Fetch the latest release
-	latestRelease, _, err := client.Repositories.GetLatestRelease(ctx, "ssotops", "gitspace")
+	latestRelease, _, err := client.Repositories.GetLatestRelease(ctx, "ssotops", "k1space")
 	if err != nil && err.(*github.ErrorResponse).Response.StatusCode != 404 {
 		return "", fmt.Errorf("failed to fetch latest release: %v", err)
 	}
@@ -139,7 +139,7 @@ func createGitHubRelease(ctx context.Context, projectRoot, newVersion string) er
 	tc := oauth2.NewClient(ctx, ts)
 	client := github.NewClient(tc)
 
-	release, _, err := client.Repositories.CreateRelease(ctx, "ssotops", "gitspace", &github.RepositoryRelease{
+	release, _, err := client.Repositories.CreateRelease(ctx, "ssotops", "k1space", &github.RepositoryRelease{
 		TagName:    github.String(newVersion),
 		Name:       github.String(fmt.Sprintf("Release %s", newVersion)),
 		Body:       github.String("Description of the release"),
@@ -163,7 +163,7 @@ func createGitHubRelease(ctx context.Context, projectRoot, newVersion string) er
 	}
 
 	for _, arch := range architectures {
-		filename := fmt.Sprintf("gitspace_%s_%s", arch.goos, arch.goarch)
+		filename := fmt.Sprintf("k1space_%s_%s", arch.goos, arch.goarch)
 		if arch.goos == "windows" {
 			filename += ".exe"
 		}
@@ -179,7 +179,7 @@ func createGitHubRelease(ctx context.Context, projectRoot, newVersion string) er
 		}
 		defer file.Close()
 
-		_, _, err = client.Repositories.UploadReleaseAsset(ctx, "ssotops", "gitspace", *release.ID, &github.UploadOptions{
+		_, _, err = client.Repositories.UploadReleaseAsset(ctx, "ssotops", "k1space", *release.ID, &github.UploadOptions{
 			Name: filename,
 		}, file)
 		if err != nil {
