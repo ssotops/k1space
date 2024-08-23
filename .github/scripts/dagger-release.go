@@ -121,11 +121,16 @@ func determineNewVersion(ctx context.Context) (string, error) {
 		return "v1.0.0", nil
 	}
 
-	// Parse the latest version and increment the patch number
+	// Try to parse the latest version
 	v, err := semver.NewVersion(*latestRelease.TagName)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse latest version: %v", err)
+		// If parsing fails, log a warning and start from v1.0.0
+		fmt.Printf("Warning: Failed to parse latest version tag '%s': %v\n", *latestRelease.TagName, err)
+		fmt.Println("Starting from v1.0.0")
+		return "v1.0.0", nil
 	}
+
+	// Increment the patch number
 	return fmt.Sprintf("v%d.%d.%d", v.Major(), v.Minor(), v.Patch()+1), nil
 }
 
