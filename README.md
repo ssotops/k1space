@@ -17,7 +17,7 @@ k1space is a command-line tool designed to streamline the process of creating an
 You can install k1space using our install script, which will download the latest release and set it up on your system:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ssotops/k1space/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ssotops/k1space/master/install.sh | bash
 ```
 
 ### Option 2: Manual installation
@@ -63,7 +63,7 @@ This directory contains:
 To uninstall k1space, you can use the provided uninstall script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ssotops/k1space/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ssotops/k1space/master/uninstall.sh | bash
 ```
 
 This script will remove the k1space binary and optionally delete the configuration directory.
