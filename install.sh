@@ -2,35 +2,75 @@
 
 set -e
 
-# GitHub repository information
-REPO="capswan/arc-k1space"
-BINARY_NAME="k1space"
+# Determine OS and architecture
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
 
-# Check for GITHUB_TOKEN in environment
-if [ -z "$GITHUB_TOKEN" ]; then
-    echo "Error: GITHUB_TOKEN environment variable is not set."
-    echo "Please set it with: export GITHUB_TOKEN=your_token_here"
+# Map architecture names
+case $ARCH in
+    x86_64)
+        ARCH="amd64"
+        ;;
+    aarch64 | arm64)
+        ARCH="arm64"
+        ;;
+    *)
+        echo "Unsupported architecture: $ARCH"
+        exit 1
+        ;;
+esac
+
+# Set GitHub repo and binary name
+REPO="ssotops/k1space"
+BINARY="k1space"
+
+# Fetch the latest release information
+echo "Fetching latest release information..."
+RELEASE_INFO=$(curl -s "https://api.github.com/repos/$REPO/releases/latest")
+
+# Extract the tag name (version) and release ID
+VERSION=$(echo "$RELEASE_INFO" | grep -m 1 '"tag_name":' | cut -d'"' -f4)
+RELEASE_ID=$(echo "$RELEASE_INFO" | grep -m 1 '"id":' | cut -d':' -f2 | tr -d ' ,')
+
+if [ -z "$VERSION" ] || [ -z "$RELEASE_ID" ]; then
+    echo "Failed to fetch latest release information"
     exit 1
 fi
 
-# Determine system information
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
-if [ "$ARCH" = "x86_64" ]; then
-    ARCH="amd64"
-elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    ARCH="arm64"
+echo "Latest version: $VERSION"
+
+# Construct the download URL for the specific asset
+ASSET_NAME="${BINARY}_${OS}_${ARCH}"
+if [ "$OS" = "windows" ]; then
+    ASSET_NAME="${ASSET_NAME}.exe"
 fi
 
-# Construct the download URL
-LATEST_RELEASE=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/$REPO/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-DOWNLOAD_URL="https://api.github.com/repos/$REPO/releases/assets/$(curl -sL -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/$REPO/releases/latest | jq ".assets[] | select(.name == \"${BINARY_NAME}_${OS}_${ARCH}\") | .id")"
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$ASSET_NAME"
 
-echo "Downloading $BINARY_NAME..."
-curl -sL -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/octet-stream" "$DOWNLOAD_URL" -o "$BINARY_NAME"
+# Create a temporary file for downloading
+TEMP_FILE=$(mktemp)
 
-echo "Installing $BINARY_NAME..."
-chmod +x "$BINARY_NAME"
-sudo mv "$BINARY_NAME" /usr/local/bin/
+# Download the binary
+echo "Downloading $BINARY $VERSION for ${OS}_${ARCH}..."
+if curl -L -o "$TEMP_FILE" "$DOWNLOAD_URL"; then
+    echo "Download completed successfully."
+else
+    echo "Failed to download $BINARY"
+    rm -f "$TEMP_FILE"
+    exit 1
+fi
 
-echo "$BINARY_NAME has been installed successfully!"
+# Make it executable (skip for Windows)
+if [ "$OS" != "windows" ]; then
+    chmod +x "$TEMP_FILE"
+fi
+
+# Move to a directory in PATH
+if [ "$OS" = "windows" ]; then
+    mv "$TEMP_FILE" "${BINARY}.exe"
+    echo "Please move ${BINARY}.exe to a directory in your PATH"
+else
+    sudo mv "$TEMP_FILE" "/usr/local/bin/$BINARY"
+fi
+
+echo "$BINARY $VERSION has been installed successfully!"
