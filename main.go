@@ -618,8 +618,8 @@ func createConfig() {
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Enter static prefix").
-				Description("Default is 'CS'").
-				Placeholder("CS").
+				Description("Default is 'K1'").
+				Placeholder("K1").
 				Value(&config.StaticPrefix),
 
 			huh.NewSelect[string]().
@@ -634,6 +634,12 @@ func createConfig() {
 		log.Error("Error in initial config form", "error", err)
 		return
 	}
+
+	// If the user didn't enter anything, use the default "K1"
+	if config.StaticPrefix == "" {
+		config.StaticPrefix = "K1"
+	}
+
 	log.Info("Initial form completed", "StaticPrefix", config.StaticPrefix, "CloudPrefix", config.CloudPrefix)
 
 	if config.CloudPrefix == "DigitalOcean" {
