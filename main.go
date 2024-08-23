@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-  "runtime"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -100,12 +100,42 @@ func main() {
 			runConfigMenu()
 		case "Kubefirst":
 			runKubefirstMenu()
-		case "Provision Cluster":
-			provisionCluster()
+		case "Cluster":
+			runClusterMenu()
 		case "k1space":
 			runK1spaceMenu()
 		case "Exit":
 			fmt.Println("Exiting k1space. Goodbye!")
+			return
+		}
+	}
+}
+
+func runClusterMenu() {
+	for {
+		var selected string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Cluster Menu").
+					Options(
+						huh.NewOption("Provision Cluster", "Provision Cluster"),
+						huh.NewOption("Back", "Back"),
+					).
+					Value(&selected),
+			),
+		)
+
+		err := form.Run()
+		if err != nil {
+			log.Error("Error running cluster menu", "error", err)
+			return
+		}
+
+		switch selected {
+		case "Provision Cluster":
+			provisionCluster()
+		case "Back":
 			return
 		}
 	}
@@ -120,7 +150,7 @@ func runMainMenu() string {
 				Options(
 					huh.NewOption("Config", "Config"),
 					huh.NewOption("Kubefirst", "Kubefirst"),
-					huh.NewOption("Provision Cluster", "Provision Cluster"),
+					huh.NewOption("Cluster", "Cluster"),
 					huh.NewOption("k1space", "k1space"),
 					huh.NewOption("Exit", "Exit"),
 				).
@@ -136,6 +166,30 @@ func runMainMenu() string {
 
 	return selected
 }
+
+func runProvisionMenu() string {
+	var selected string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Cluster Menu").
+				Options(
+					huh.NewOption("Provision Cluster", "Provision Cluster"),
+					huh.NewOption("Back", "Back"),
+				).
+				Value(&selected),
+		),
+	)
+
+	err := form.Run()
+	if err != nil {
+		log.Error("Error running provision menu", "error", err)
+		return "Back"
+	}
+
+	return selected
+}
+
 func runK1spaceMenu() {
 	for {
 		var selected string
