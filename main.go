@@ -687,15 +687,13 @@ func createConfig() {
 		return
 	}
 
-	var cloudRegion string // Declare this variable to store the selected region
+	var cloudRegion string
+	var nodeType string
 
-	flagInputs := make([]struct{ Name, Value string }, 0, len(flags))
 	flagGroups := make([]huh.Field, 0, len(flags))
 
 	for flag, description := range flags {
 		defaultValue := indexFile.DefaultValues[flag]
-		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
-		flagInputs = append(flagInputs, flagInput)
 
 		var field huh.Field
 		switch flag {
@@ -704,19 +702,20 @@ func createConfig() {
 				Title("Select cloud region").
 				Description(description).
 				Options(getRegionOptions(config.CloudPrefix, cloudsFile)...).
-				Value(&cloudRegion) // Use the cloudRegion variable here
+				Value(&cloudRegion)
 		case "node-type":
 			field = huh.NewSelect[string]().
 				Title("Select node type").
 				Description(description).
 				Options(getNodeTypeOptions(config.CloudPrefix, cloudsFile)...).
-				Value(&flagInput.Value)
+				Value(&nodeType)
 		default:
+			var value string
 			field = huh.NewInput().
 				Title(fmt.Sprintf("Enter value for %s", flag)).
 				Description(description).
 				Placeholder(defaultValue).
-				Value(&flagInput.Value)
+				Value(&value)
 		}
 
 		flagGroups = append(flagGroups, field)
@@ -732,83 +731,34 @@ func createConfig() {
 		return
 	}
 
-	// Set the selected region to the config
+	// Collect all flag inputs
+	for _, field := range flagGroups {
+		switch f := field.(type) {
+		case *huh.Select[string]:
+			value := f.GetValue().(string)
+			if value != "" {
+				config.Flags[f.GetKey()] = value
+			}
+		case *huh.Input:
+			value := f.GetValue().(string)
+			if value != "" {
+				config.Flags[f.GetKey()] = value
+			}
+		}
+	}
+
+	// Set cloud-region and node-type explicitly
 	config.Region = cloudRegion
+	config.SelectedNodeType = nodeType
 
-	// Update config.Flags and indexFile.DefaultValues with the collected values
-	for _, fi := range flagInputs {
-		if config.Flags == nil {
-			config.Flags = make(map[string]string)
-		}
-		config.Flags[fi.Name] = fi.Value
-		if indexFile.DefaultValues == nil {
-			indexFile.DefaultValues = make(map[string]string)
-		}
-		indexFile.DefaultValues[fi.Name] = fi.Value
-
-		if fi.Name == "node-type" {
-			config.SelectedNodeType = fi.Value
-		}
-	}
-
-	// Ensure cloud-region is set in config.Flags and indexFile.DefaultValues
+	// Update the Flags map with the selected values
 	config.Flags["cloud-region"] = cloudRegion
-	indexFile.DefaultValues["cloud-region"] = cloudRegion
+	config.Flags["node-type"] = strings.Split(nodeType, " ")[0] // Only keep the node type name
 
-	log.Info("Flag input form completed", "CloudPrefix", config.CloudPrefix, "Region", config.Region, "StaticPrefix", config.StaticPrefix)
+	log.Info("Final config", "Config", fmt.Sprintf("%+v", config))
 
-	// Check if region is empty
-	if config.Region == "" {
-		log.Error("Cloud region is not set")
-		return
-	}
-
-	log.Info("Updated config.Flags and indexFile.DefaultValues", "ConfigFlags", config.Flags, "IndexFileDefaultValues", indexFile.DefaultValues)
-
-	// Check if the directory already exists and prompt for overwrite
+	// Define baseDir
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
-	log.Info("Calculated baseDir", "baseDir", baseDir)
-
-	if _, err := os.Stat(baseDir); !os.IsNotExist(err) {
-		var overwrite bool
-		err := huh.NewConfirm().
-			Title(fmt.Sprintf("Directory %s already exists. Do you want to overwrite?", baseDir)).
-			Value(&overwrite).
-			Run()
-
-		if err != nil {
-			log.Error("Error in overwrite confirmation", "error", err)
-			return
-		}
-
-		if !overwrite {
-			log.Info("User chose not to overwrite. Exiting.")
-			return
-		}
-
-		// Move existing directory to cache
-		cacheDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", ".cache", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
-		err = os.MkdirAll(filepath.Dir(cacheDir), 0755)
-		if err != nil {
-			log.Error("Error creating cache directory", "error", err)
-			return
-		}
-
-		err = os.Rename(baseDir, cacheDir)
-		if err != nil {
-			log.Error("Error moving existing directory to cache", "error", err)
-			return
-		}
-
-		log.Info("Existing directory moved to cache", "cacheDir", cacheDir)
-	}
-
-	err = generateFiles(config, kubefirstPath)
-	if err != nil {
-		log.Error("Error generating files", "error", err)
-		return
-	}
-	log.Info("Files generated successfully")
 
 	err = updateIndexFile(config, indexFile)
 	if err != nil {
@@ -817,12 +767,15 @@ func createConfig() {
 	}
 	log.Info("Index file updated successfully")
 
-	err = updateCloudsFile(config, cloudsFile)
+	printIndexFile()
+
+	// After this, continue with the existing code for generating files
+	err = generateFiles(config, kubefirstPath)
 	if err != nil {
-		log.Error("Error updating clouds file", "error", err)
+		log.Error("Error generating files", "error", err)
 		return
 	}
-	log.Info("Clouds file updated successfully")
+	log.Info("Files generated successfully")
 
 	// Pretty-print the summary
 	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))
@@ -1062,6 +1015,7 @@ func loadIndexFile() (IndexFile, error) {
 
 func writeIndexFile(indexFile IndexFile) error {
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
+	log.Info("Writing index file", "IndexFile", fmt.Sprintf("%+v", indexFile))
 
 	f := hclwrite.NewEmptyFile()
 	rootBody := f.Body()
@@ -1090,26 +1044,82 @@ func writeIndexFile(indexFile IndexFile) error {
 }
 
 func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
+	log.Info("Updating index file", "ExistingConfigs", indexFile.Configs, "ExistingDefaultValues", indexFile.DefaultValues)
+
 	// Update LastUpdated
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
 
-	// Add or update the new configuration
+	// Increment version
+	indexFile.Version++
+
+	// Create the config key
 	key := fmt.Sprintf("%s_%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
-	indexFile.Configs[key] = Config{
-		Files: []string{
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
-		},
+
+	// Create the file paths
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
+	newFiles := []string{
+		filepath.Join(baseDir, "00-init.sh"),
+		filepath.Join(baseDir, "01-kubefirst-cloud.sh"),
+		filepath.Join(baseDir, ".local.cloud.env"),
 	}
 
-	// Update default_values
+	// Add or update the config without overwriting existing configs
+	indexFile.Configs[key] = Config{Files: newFiles}
+
+	// Update default_values with all flags
 	for k, v := range config.Flags {
 		indexFile.DefaultValues[k] = v
+		log.Info("Setting default value", "Key", k, "Value", v)
+	}
+
+	// Ensure cloud-region and node-type are always set in default_values
+	indexFile.DefaultValues["cloud-region"] = config.Region
+	indexFile.DefaultValues["node-type"] = config.SelectedNodeType
+
+	log.Info("Updating index file", "NewConfigs", indexFile.Configs, "NewDefaultValues", indexFile.DefaultValues)
+	log.Info("New config being added/updated", "Key", key, "Files", newFiles)
+
+	// Validate the updated indexFile
+	if err := validateIndexFile(indexFile); err != nil {
+		return fmt.Errorf("invalid index file after update: %w", err)
 	}
 
 	// Write the updated index file
 	return writeIndexFile(indexFile)
+}
+
+func validateIndexFile(indexFile IndexFile) error {
+	if indexFile.Version <= 0 {
+		return fmt.Errorf("invalid version: %d", indexFile.Version)
+	}
+
+	if indexFile.LastUpdated == "" {
+		return fmt.Errorf("last_updated is empty")
+	}
+
+	if len(indexFile.Configs) == 0 {
+		return fmt.Errorf("configs is empty")
+	}
+
+	for key, config := range indexFile.Configs {
+		if len(config.Files) == 0 {
+			return fmt.Errorf("config '%s' has no files", key)
+		}
+		for _, file := range config.Files {
+			if file == "" {
+				return fmt.Errorf("config '%s' contains an empty file path", key)
+			}
+		}
+	}
+
+	requiredFlags := []string{"cloud-region", "node-type"}
+	for _, flag := range requiredFlags {
+		if _, exists := indexFile.DefaultValues[flag]; !exists {
+			return fmt.Errorf("required flag '%s' is missing in default_values", flag)
+		}
+	}
+
+	return nil
 }
 
 func backupIndexFile(indexFile IndexFile) error {
@@ -2011,4 +2021,29 @@ func fetchKubefirstFlags(kubefirstPath, cloudProvider string) (map[string]string
 	}
 
 	return flags, nil
+}
+
+func printIndexFile() {
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		log.Error("Error loading index file", "error", err)
+		return
+	}
+
+	fmt.Println("Current Index File Contents:")
+	fmt.Printf("Version: %d\n", indexFile.Version)
+	fmt.Printf("Last Updated: %s\n", indexFile.LastUpdated)
+
+	fmt.Println("Configs:")
+	for key, config := range indexFile.Configs {
+		fmt.Printf("  %s:\n", key)
+		for _, file := range config.Files {
+			fmt.Printf("    - %s\n", file)
+		}
+	}
+
+	fmt.Println("Default Values:")
+	for key, value := range indexFile.DefaultValues {
+		fmt.Printf("  %s: %s\n", key, value)
+	}
 }
