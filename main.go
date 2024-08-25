@@ -686,6 +686,8 @@ func createConfig() {
 		return
 	}
 
+	var cloudRegion string // Declare this variable to store the selected region
+
 	flagInputs := make([]struct{ Name, Value string }, 0, len(flags))
 	flagGroups := make([]huh.Field, 0, len(flags))
 
@@ -701,7 +703,7 @@ func createConfig() {
 				Title("Select cloud region").
 				Description(description).
 				Options(getRegionOptions(config.CloudPrefix, cloudsFile)...).
-				Value(&flagInput.Value)
+				Value(&cloudRegion) // Use the cloudRegion variable here
 		case "node-type":
 			field = huh.NewSelect[string]().
 				Title("Select node type").
@@ -729,6 +731,9 @@ func createConfig() {
 		return
 	}
 
+	// Set the selected region to the config
+	config.Region = cloudRegion
+
 	// Update config.Flags and indexFile.DefaultValues with the collected values
 	for _, fi := range flagInputs {
 		if config.Flags == nil {
@@ -743,12 +748,58 @@ func createConfig() {
 		if fi.Name == "node-type" {
 			config.SelectedNodeType = fi.Value
 		}
-		if fi.Name == "cloud-region" {
-			config.Region = fi.Value
-		}
+	}
+
+	// Ensure cloud-region is set in config.Flags
+	config.Flags["cloud-region"] = cloudRegion
+
+	log.Info("Flag input form completed", "CloudPrefix", config.CloudPrefix, "Region", config.Region, "StaticPrefix", config.StaticPrefix)
+
+	// Check if region is empty
+	if config.Region == "" {
+		log.Error("Cloud region is not set")
+		return
 	}
 
 	log.Info("Updated config.Flags and indexFile.DefaultValues", "ConfigFlags", config.Flags, "IndexFileDefaultValues", indexFile.DefaultValues)
+
+	// Check if the directory already exists and prompt for overwrite
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
+	log.Info("Calculated baseDir", "baseDir", baseDir)
+
+	if _, err := os.Stat(baseDir); !os.IsNotExist(err) {
+		var overwrite bool
+		err := huh.NewConfirm().
+			Title(fmt.Sprintf("Directory %s already exists. Do you want to overwrite?", baseDir)).
+			Value(&overwrite).
+			Run()
+
+		if err != nil {
+			log.Error("Error in overwrite confirmation", "error", err)
+			return
+		}
+
+		if !overwrite {
+			log.Info("User chose not to overwrite. Exiting.")
+			return
+		}
+
+		// Move existing directory to cache
+		cacheDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", ".cache", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
+		err = os.MkdirAll(filepath.Dir(cacheDir), 0755)
+		if err != nil {
+			log.Error("Error creating cache directory", "error", err)
+			return
+		}
+
+		err = os.Rename(baseDir, cacheDir)
+		if err != nil {
+			log.Error("Error moving existing directory to cache", "error", err)
+			return
+		}
+
+		log.Info("Existing directory moved to cache", "cacheDir", cacheDir)
+	}
 
 	err = generateFiles(config, kubefirstPath)
 	if err != nil {
@@ -771,9 +822,6 @@ func createConfig() {
 	}
 	log.Info("Clouds file updated successfully")
 
-	// Define baseDir
-	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
-
 	// Pretty-print the summary
 	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))
 	fmt.Println()
@@ -793,7 +841,7 @@ func createConfig() {
 	fmt.Println(style.Render("\n🚀 To run the initialization script, use the following command:"))
 	fmt.Printf("cd %s && ./00-init.sh\n", baseDir)
 
-	log.Info("createConfig function completed successfully")
+	log.Info("createConfig function completed successfully", "baseDir", baseDir)
 }
 
 func getCivoClient() (*civogo.Client, error) {
@@ -863,6 +911,7 @@ func getRegionOptions(cloudProvider string, cloudsFile CloudsFile) []huh.Option[
 	for i, region := range regions {
 		options[i] = huh.Option[string]{Key: region, Value: region}
 	}
+	log.Info("Available regions", "cloudProvider", cloudProvider, "regions", regions)
 	return options
 }
 
@@ -915,12 +964,12 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
 
 	// Add or update the new configuration
-	key := fmt.Sprintf("%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
+	key := fmt.Sprintf("%s_%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
 	indexFile.Configs[key] = Config{
 		Files: []string{
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "00-init.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "01-kubefirst-cloud.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), ".local.cloud.env"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
 		},
 	}
 
@@ -1087,33 +1136,50 @@ func updateDigitalOceanRegions(cloudsFile *CloudsFile) error {
 }
 
 func generateFiles(config CloudConfig, kubefirstPath string) error {
-	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
+	if config.Region == "" {
+		return fmt.Errorf("cloud region is not set")
+	}
+
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
+	log.Info("Generating files", "baseDir", baseDir)
+
 	err := os.MkdirAll(baseDir, 0755)
 	if err != nil {
+		log.Error("Error creating directory", "baseDir", baseDir, "error", err)
 		return err
 	}
 
 	// Generate .local.cloud.env
 	envContent := generateEnvContent(config)
-	err = os.WriteFile(filepath.Join(baseDir, ".local.cloud.env"), []byte(envContent), 0644)
+	envPath := filepath.Join(baseDir, ".local.cloud.env")
+	log.Info("Writing .local.cloud.env", "path", envPath)
+	err = os.WriteFile(envPath, []byte(envContent), 0644)
 	if err != nil {
+		log.Error("Error writing .local.cloud.env", "path", envPath, "error", err)
 		return err
 	}
 
 	// Generate 00-init.sh
 	initContent := generateInitContent()
-	err = os.WriteFile(filepath.Join(baseDir, "00-init.sh"), []byte(initContent), 0755)
+	initPath := filepath.Join(baseDir, "00-init.sh")
+	log.Info("Writing 00-init.sh", "path", initPath)
+	err = os.WriteFile(initPath, []byte(initContent), 0755)
 	if err != nil {
+		log.Error("Error writing 00-init.sh", "path", initPath, "error", err)
 		return err
 	}
 
 	// Generate 01-kubefirst-cloud.sh
 	kubefirstContent := generateKubefirstContent(config, kubefirstPath)
-	err = os.WriteFile(filepath.Join(baseDir, "01-kubefirst-cloud.sh"), []byte(kubefirstContent), 0755)
+	kubefirstScriptPath := filepath.Join(baseDir, "01-kubefirst-cloud.sh")
+	log.Info("Writing 01-kubefirst-cloud.sh", "path", kubefirstScriptPath)
+	err = os.WriteFile(kubefirstScriptPath, []byte(kubefirstContent), 0755)
 	if err != nil {
+		log.Error("Error writing 01-kubefirst-cloud.sh", "path", kubefirstScriptPath, "error", err)
 		return err
 	}
 
+	log.Info("All files generated successfully", "baseDir", baseDir)
 	return nil
 }
 
