@@ -888,6 +888,20 @@ func loadIndexFile() (IndexFile, error) {
 	var indexFile IndexFile
 
 	log.Info("Attempting to read index.hcl", "path", indexPath)
+
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		log.Info("index.hcl does not exist, creating a new one")
+		err := createOrUpdateIndexFile(indexPath, IndexFile{
+			Version:       1,
+			LastUpdated:   time.Now().UTC().Format(time.RFC3339),
+			Configs:       make(map[string]Config),
+			DefaultValues: make(map[string]string),
+		})
+		if err != nil {
+			return indexFile, fmt.Errorf("error creating index.hcl: %w", err)
+		}
+	}
+
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
 		log.Error("Failed to read index.hcl", "error", err)
@@ -906,6 +920,43 @@ func loadIndexFile() (IndexFile, error) {
 
 	log.Info("Finished parsing index.hcl", "configCount", len(indexFile.Configs))
 	return indexFile, nil
+}
+
+func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
+	f := hclwrite.NewEmptyFile()
+	rootBody := f.Body()
+
+	rootBody.SetAttributeValue("version", cty.NumberIntVal(int64(indexFile.Version)))
+	rootBody.SetAttributeValue("last_updated", cty.StringVal(indexFile.LastUpdated))
+
+	configsBlock := rootBody.AppendNewBlock("configs", nil)
+	configsBody := configsBlock.Body()
+	for k, v := range indexFile.Configs {
+		configBlock := configsBody.AppendNewBlock(k, nil)
+		fileValues := make([]cty.Value, len(v.Files))
+		for i, file := range v.Files {
+			fileValues[i] = cty.StringVal(filepath.ToSlash(file))
+		}
+		configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
+	}
+
+	defaultValuesBlock := rootBody.AppendNewBlock("default_values", nil)
+	defaultValuesBody := defaultValuesBlock.Body()
+	for k, v := range indexFile.DefaultValues {
+		defaultValuesBody.SetAttributeValue(k, cty.StringVal(v))
+	}
+
+	err := os.MkdirAll(filepath.Dir(path), 0755)
+	if err != nil {
+		return fmt.Errorf("error creating directory for index.hcl: %w", err)
+	}
+
+	err = os.WriteFile(path, f.Bytes(), 0644)
+	if err != nil {
+		return fmt.Errorf("error writing index.hcl: %w", err)
+	}
+
+	return nil
 }
 
 func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
@@ -1844,3 +1895,5 @@ func fetchKubefirstFlags(kubefirstPath, cloudProvider string) (map[string]string
 
 	return flags, nil
 }
+
+
