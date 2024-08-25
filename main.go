@@ -36,10 +36,11 @@ var (
 )
 
 type CloudConfig struct {
-	StaticPrefix string
-	CloudPrefix  string
-	Region       string
-	Flags        map[string]string
+	StaticPrefix     string
+	CloudPrefix      string
+	Region           string
+	Flags            map[string]string
+	SelectedNodeType string
 }
 
 type IndexFile struct {
@@ -614,7 +615,13 @@ func createConfig() {
 	}
 	log.Info("Clouds file loaded", "cloudsFile", fmt.Sprintf("%+v", cloudsFile))
 
-	form := huh.NewForm(
+	kubefirstPath, err := promptKubefirstBinary()
+	if err != nil {
+		log.Error("Error selecting kubefirst binary", "error", err)
+		return
+	}
+
+	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Enter static prefix").
@@ -627,115 +634,50 @@ func createConfig() {
 				Options(getCloudProviderOptions()...).
 				Value(&config.CloudPrefix),
 		),
-	)
+	).Run()
 
-	err = form.Run()
 	if err != nil {
 		log.Error("Error in initial config form", "error", err)
 		return
 	}
 
-	// If the user didn't enter anything, use the default "K1"
-	if config.StaticPrefix == "" {
-		config.StaticPrefix = "K1"
-	}
-
-	log.Info("Initial form completed", "StaticPrefix", config.StaticPrefix, "CloudPrefix", config.CloudPrefix)
-
-	if config.CloudPrefix == "DigitalOcean" {
-		err = updateDigitalOceanRegions(&cloudsFile)
-		if err != nil {
-			log.Error("Error updating DigitalOcean regions", "error", err)
-			return
-		}
-		err = updateDigitalOceanNodeTypes(&cloudsFile)
-		if err != nil {
-			log.Error("Error updating DigitalOcean node types", "error", err)
-			return
-		}
-	} else if config.CloudPrefix == "Civo" {
-		err = updateCivoRegions(&cloudsFile)
-		if err != nil {
-			log.Error("Error updating Civo regions", "error", err)
-			return
-		}
-		err = updateCivoNodeTypes(&cloudsFile)
-		if err != nil {
-			log.Error("Error updating Civo node types", "error", err)
-			return
-		}
-	}
-	log.Info("Cloud provider specific updates completed")
-
-	regionForm := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Select region").
-				Options(getRegionOptions(config.CloudPrefix, cloudsFile)...).
-				Value(&config.Region),
-		),
-	)
-
-	err = regionForm.Run()
+	flags, err := fetchKubefirstFlags(kubefirstPath, config.CloudPrefix)
 	if err != nil {
-		log.Error("Error in region selection", "error", err)
-		return
-	}
-	log.Info("Region selected", "Region", config.Region)
-
-	flags := cloudFlags[config.CloudPrefix]
-	if len(flags) == 0 {
-		log.Error("No flags found for the selected cloud provider")
+		log.Error("Error fetching kubefirst flags", "error", err)
 		return
 	}
 	log.Info("Flags retrieved for cloud provider", "Flags", flags)
 
+	if len(flags) == 0 {
+		log.Error("No flags found for the selected cloud provider")
+		return
+	}
+
 	flagInputs := make([]struct{ Name, Value string }, 0, len(flags))
 	flagGroups := make([]huh.Field, 0, len(flags))
-	for _, flag := range flags {
-		if flag == "cloud-region" || flag == "node-type" {
-			continue // Skip cloud-region and node-type as we've already set them
-		}
 
+	for flag, description := range flags {
 		defaultValue := indexFile.DefaultValues[flag]
 		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
 		flagInputs = append(flagInputs, flagInput)
-		flagGroups = append(flagGroups,
-			huh.NewInput().
-				Title(fmt.Sprintf("Enter value for %s", flag)).
-				Placeholder(defaultValue).
-				Value(&flagInputs[len(flagInputs)-1].Value),
-		)
-	}
-	log.Info("Flag inputs and groups prepared", "FlagInputs", flagInputs)
 
-	var selectedNodeType string
-	nodeTypeForm := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Select node type").
+		var field huh.Field
+		if flag == "node-type" {
+			field = huh.NewSelect[string]().
+				Title(fmt.Sprintf("Select %s", flag)).
+				Description(description).
 				Options(getNodeTypeOptions(config.CloudPrefix, cloudsFile)...).
-				Value(&selectedNodeType),
-		),
-	)
+				Value(&flagInputs[len(flagInputs)-1].Value)
+		} else {
+			field = huh.NewInput().
+				Title(fmt.Sprintf("Enter value for %s", flag)).
+				Description(description).
+				Placeholder(defaultValue).
+				Value(&flagInputs[len(flagInputs)-1].Value)
+		}
 
-	err = nodeTypeForm.Run()
-	if err != nil {
-		log.Error("Error in node type selection", "error", err)
-		return
+		flagGroups = append(flagGroups, field)
 	}
-	log.Info("Node type selected", "SelectedNodeType", selectedNodeType)
-
-	// Extract the actual node type name from the selected value
-	nodeTypeName := strings.Split(selectedNodeType, " ")[0]
-
-	// Set the node-type flag to the selected node type name
-	if config.Flags == nil {
-		log.Error("config.Flags is nil, reinitializing")
-		config.Flags = make(map[string]string)
-	}
-	config.Flags["node-type"] = nodeTypeName
-	log.Info("Node type set in config.Flags", "NodeType", nodeTypeName)
 
 	flagForm := huh.NewForm(
 		huh.NewGroup(flagGroups...),
@@ -746,21 +688,23 @@ func createConfig() {
 		log.Error("Error in flag input form", "error", err)
 		return
 	}
-	log.Info("Flag input form completed")
 
 	// Update config.Flags and indexFile.DefaultValues with the collected values
 	for _, fi := range flagInputs {
 		if config.Flags == nil {
-			log.Error("config.Flags is nil, reinitializing")
 			config.Flags = make(map[string]string)
 		}
 		config.Flags[fi.Name] = fi.Value
 		if indexFile.DefaultValues == nil {
-			log.Error("indexFile.DefaultValues is nil, initializing")
 			indexFile.DefaultValues = make(map[string]string)
 		}
 		indexFile.DefaultValues[fi.Name] = fi.Value
+
+		if fi.Name == "node-type" {
+			config.SelectedNodeType = fi.Value
+		}
 	}
+
 	log.Info("Updated config.Flags and indexFile.DefaultValues", "ConfigFlags", config.Flags, "IndexFileDefaultValues", indexFile.DefaultValues)
 
 	// Ensure cloud-region and node-type is set in the indexFile
@@ -769,10 +713,10 @@ func createConfig() {
 		indexFile.DefaultValues = make(map[string]string)
 	}
 	indexFile.DefaultValues["cloud-region"] = config.Region
-	indexFile.DefaultValues["node-type"] = selectedNodeType
+	indexFile.DefaultValues["node-type"] = config.SelectedNodeType
 	log.Info("Set cloud-region and node-type in indexFile.DefaultValues")
 
-	err = generateFiles(config)
+	err = generateFiles(config, kubefirstPath)
 	if err != nil {
 		log.Error("Error generating files", "error", err)
 		return
@@ -802,7 +746,7 @@ func createConfig() {
 
 	fmt.Printf("☁️ Cloud Provider: %s\n", config.CloudPrefix)
 	fmt.Printf("🌎 Region: %s\n", config.Region)
-	fmt.Printf("💻 Node Type: %s\n", selectedNodeType)
+	fmt.Printf("💻 Node Type: %s\n", config.SelectedNodeType)
 
 	// Print relevant file paths
 	fmt.Println(style.Render("\n📁 Generated Files:"))
@@ -1108,7 +1052,7 @@ func updateDigitalOceanRegions(cloudsFile *CloudsFile) error {
 	return nil
 }
 
-func generateFiles(config CloudConfig) error {
+func generateFiles(config CloudConfig, kubefirstPath string) error {
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 	err := os.MkdirAll(baseDir, 0755)
 	if err != nil {
@@ -1130,7 +1074,7 @@ func generateFiles(config CloudConfig) error {
 	}
 
 	// Generate 01-kubefirst-cloud.sh
-	kubefirstContent := generateKubefirstContent(config)
+	kubefirstContent := generateKubefirstContent(config, kubefirstPath)
 	err = os.WriteFile(filepath.Join(baseDir, "01-kubefirst-cloud.sh"), []byte(kubefirstContent), 0755)
 	if err != nil {
 		return err
@@ -1153,14 +1097,16 @@ op run --env-file="./.local.cloud.env" -- sh ./01-kubefirst-cloud.sh
 `
 }
 
-func generateKubefirstContent(config CloudConfig) string {
+func generateKubefirstContent(config CloudConfig, kubefirstPath string) string {
 	var content strings.Builder
 	content.WriteString("#!/bin/bash\n\n")
 	content.WriteString("./prepare/01-check-dependencies.sh\n\n")
-	content.WriteString(fmt.Sprintf("kubefirst %s create \\\n", strings.ToLower(config.CloudPrefix)))
+	content.WriteString(fmt.Sprintf("%s %s create \\\n", kubefirstPath, strings.ToLower(config.CloudPrefix)))
 
-	for flag := range config.Flags {
-		content.WriteString(fmt.Sprintf("  --%s $%s_%s_%s_%s \\\n", flag, config.StaticPrefix, config.CloudPrefix, strings.ToUpper(config.Region), strings.ToUpper(flag)))
+	for flag, value := range config.Flags {
+		if value != "" {
+			content.WriteString(fmt.Sprintf("  --%s \"%s\" \\\n", flag, value))
+		}
 	}
 
 	return content.String()
@@ -1798,4 +1744,69 @@ func upgradeK1space(logger *log.Logger) {
 	}
 
 	logger.Info("k1space has been successfully upgraded!", "version", version)
+}
+
+func promptKubefirstBinary() (string, error) {
+	var useGlobal bool
+	err := huh.NewConfirm().
+		Title("Do you want to use the global kubefirst installation?").
+		Value(&useGlobal).
+		Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	if useGlobal {
+		path, err := exec.LookPath("kubefirst")
+		if err != nil {
+			return "", fmt.Errorf("global kubefirst not found: %w", err)
+		}
+		version, err := exec.Command(path, "version").Output()
+		if err != nil {
+			return "", fmt.Errorf("error getting kubefirst version: %w", err)
+		}
+		fmt.Printf("Using global kubefirst: %s\nVersion: %s\n", path, version)
+		return path, nil
+	}
+
+	var localPath string
+	err = huh.NewInput().
+		Title("Enter the path to the local kubefirst binary").
+		Value(&localPath).
+		Run()
+
+	if err != nil {
+		return "", err
+	}
+
+	return localPath, nil
+}
+
+func fetchKubefirstFlags(kubefirstPath, cloudProvider string) (map[string]string, error) {
+	cmd := exec.Command(kubefirstPath, strings.ToLower(cloudProvider), "create", "--help")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("error running kubefirst help: %w", err)
+	}
+
+	flags := make(map[string]string)
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "--") {
+			parts := strings.SplitN(trimmedLine, " ", 2)
+			if len(parts) > 0 {
+				flag := strings.TrimPrefix(parts[0], "--")
+				flag = strings.TrimSuffix(flag, ",")
+				description := ""
+				if len(parts) > 1 {
+					description = strings.TrimSpace(parts[1])
+				}
+				flags[flag] = description
+			}
+		}
+	}
+
+	return flags, nil
 }
