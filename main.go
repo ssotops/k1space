@@ -51,7 +51,8 @@ type IndexFile struct {
 }
 
 type Config struct {
-	Files []string `hcl:"files"`
+	Files []string          `hcl:"files"`
+	Flags map[string]string `hcl:"flags,omitempty"`
 }
 
 type CloudsFile struct {
@@ -973,6 +974,7 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
 			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
 		},
+		Flags: config.Flags,
 	}
 
 	// Create HCL file
@@ -1170,8 +1172,10 @@ func generateFiles(config CloudConfig, kubefirstPath string) error {
 
 func generateEnvContent(config CloudConfig) string {
 	var content strings.Builder
+	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
 	for flag, value := range config.Flags {
-		content.WriteString(fmt.Sprintf("export %s_%s_%s_%s=\"%s\"\n", config.StaticPrefix, config.CloudPrefix, strings.ToUpper(config.Region), strings.ToUpper(flag), value))
+		envVarName := fmt.Sprintf("%s_%s", prefix, strings.ToUpper(strings.ReplaceAll(flag, "-", "_")))
+		content.WriteString(fmt.Sprintf("export %s=\"%s\"\n", envVarName, value))
 	}
 	return content.String()
 }
@@ -1188,11 +1192,15 @@ func generateKubefirstContent(config CloudConfig, kubefirstPath string) string {
 	content.WriteString("./prepare/01-check-dependencies.sh\n\n")
 	content.WriteString(fmt.Sprintf("%s %s create \\\n", kubefirstPath, strings.ToLower(config.CloudPrefix)))
 
-	for flag, value := range config.Flags {
-		if value != "" {
-			content.WriteString(fmt.Sprintf("  --%s \"%s\" \\\n", flag, value))
-		}
+	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
+	flags := make([]string, 0, len(config.Flags))
+	for flag, _ := range config.Flags {
+		envVarName := fmt.Sprintf("%s_%s", prefix, strings.ToUpper(strings.ReplaceAll(flag, "-", "_")))
+		flags = append(flags, fmt.Sprintf("  --%s \"$%s\"", flag, envVarName))
 	}
+
+	content.WriteString(strings.Join(flags, " \\\n"))
+	content.WriteString("\n")
 
 	return content.String()
 }
