@@ -641,6 +641,39 @@ func createConfig() {
 		return
 	}
 
+	// If the user didn't enter anything, use the default "K1"
+	if config.StaticPrefix == "" {
+		config.StaticPrefix = "K1"
+	}
+
+	log.Info("Initial form completed", "StaticPrefix", config.StaticPrefix, "CloudPrefix", config.CloudPrefix)
+
+	// Update cloud regions and node types
+	if config.CloudPrefix == "DigitalOcean" {
+		err = updateDigitalOceanRegions(&cloudsFile)
+		if err != nil {
+			log.Error("Error updating DigitalOcean regions", "error", err)
+			return
+		}
+		err = updateDigitalOceanNodeTypes(&cloudsFile)
+		if err != nil {
+			log.Error("Error updating DigitalOcean node types", "error", err)
+			return
+		}
+	} else if config.CloudPrefix == "Civo" {
+		err = updateCivoRegions(&cloudsFile)
+		if err != nil {
+			log.Error("Error updating Civo regions", "error", err)
+			return
+		}
+		err = updateCivoNodeTypes(&cloudsFile)
+		if err != nil {
+			log.Error("Error updating Civo node types", "error", err)
+			return
+		}
+	}
+	log.Info("Cloud provider specific updates completed")
+
 	flags, err := fetchKubefirstFlags(kubefirstPath, config.CloudPrefix)
 	if err != nil {
 		log.Error("Error fetching kubefirst flags", "error", err)
@@ -662,18 +695,25 @@ func createConfig() {
 		flagInputs = append(flagInputs, flagInput)
 
 		var field huh.Field
-		if flag == "node-type" {
+		switch flag {
+		case "cloud-region":
 			field = huh.NewSelect[string]().
-				Title(fmt.Sprintf("Select %s", flag)).
+				Title("Select cloud region").
+				Description(description).
+				Options(getRegionOptions(config.CloudPrefix, cloudsFile)...).
+				Value(&flagInput.Value)
+		case "node-type":
+			field = huh.NewSelect[string]().
+				Title("Select node type").
 				Description(description).
 				Options(getNodeTypeOptions(config.CloudPrefix, cloudsFile)...).
-				Value(&flagInputs[len(flagInputs)-1].Value)
-		} else {
+				Value(&flagInput.Value)
+		default:
 			field = huh.NewInput().
 				Title(fmt.Sprintf("Enter value for %s", flag)).
 				Description(description).
 				Placeholder(defaultValue).
-				Value(&flagInputs[len(flagInputs)-1].Value)
+				Value(&flagInput.Value)
 		}
 
 		flagGroups = append(flagGroups, field)
@@ -703,18 +743,12 @@ func createConfig() {
 		if fi.Name == "node-type" {
 			config.SelectedNodeType = fi.Value
 		}
+		if fi.Name == "cloud-region" {
+			config.Region = fi.Value
+		}
 	}
 
 	log.Info("Updated config.Flags and indexFile.DefaultValues", "ConfigFlags", config.Flags, "IndexFileDefaultValues", indexFile.DefaultValues)
-
-	// Ensure cloud-region and node-type is set in the indexFile
-	if indexFile.DefaultValues == nil {
-		log.Error("indexFile.DefaultValues is nil, initializing")
-		indexFile.DefaultValues = make(map[string]string)
-	}
-	indexFile.DefaultValues["cloud-region"] = config.Region
-	indexFile.DefaultValues["node-type"] = config.SelectedNodeType
-	log.Info("Set cloud-region and node-type in indexFile.DefaultValues")
 
 	err = generateFiles(config, kubefirstPath)
 	if err != nil {
