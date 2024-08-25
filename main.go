@@ -966,12 +966,12 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
 
 	// Add or update the new configuration
-	key := fmt.Sprintf("%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
+	key := fmt.Sprintf("%s_%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
 	indexFile.Configs[key] = Config{
 		Files: []string{
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "00-init.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), "01-kubefirst-cloud.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), ".local.cloud.env"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
+			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
 		},
 	}
 
@@ -1138,7 +1138,7 @@ func updateDigitalOceanRegions(cloudsFile *CloudsFile) error {
 }
 
 func generateFiles(config CloudConfig, kubefirstPath string) error {
-	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
 	err := os.MkdirAll(baseDir, 0755)
 	if err != nil {
 		return err
@@ -1895,5 +1895,3 @@ func fetchKubefirstFlags(kubefirstPath, cloudProvider string) (map[string]string
 
 	return flags, nil
 }
-
-
