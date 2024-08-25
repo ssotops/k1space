@@ -22,6 +22,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/gocty"
 )
 
 var (
@@ -750,8 +751,9 @@ func createConfig() {
 		}
 	}
 
-	// Ensure cloud-region is set in config.Flags
+	// Ensure cloud-region is set in config.Flags and indexFile.DefaultValues
 	config.Flags["cloud-region"] = cloudRegion
+	indexFile.DefaultValues["cloud-region"] = cloudRegion
 
 	log.Info("Flag input form completed", "CloudPrefix", config.CloudPrefix, "Region", config.Region, "StaticPrefix", config.StaticPrefix)
 
@@ -936,30 +938,158 @@ func loadIndexFile() (IndexFile, error) {
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
 	var indexFile IndexFile
 
-	log.Info("Attempting to read index.hcl", "path", indexPath)
+	// Ensure the directory exists
+	err := os.MkdirAll(filepath.Dir(indexPath), 0755)
+	if err != nil {
+		return indexFile, fmt.Errorf("error creating directory: %w", err)
+	}
+
+	// Check if the file exists
+	_, err = os.Stat(indexPath)
+	if os.IsNotExist(err) {
+		// Create a new index file with default values
+		indexFile = IndexFile{
+			Version:       1,
+			LastUpdated:   time.Now().UTC().Format(time.RFC3339),
+			Configs:       make(map[string]Config),
+			DefaultValues: make(map[string]string),
+		}
+		// Write the new index file
+		if err := writeIndexFile(indexFile); err != nil {
+			return indexFile, fmt.Errorf("error creating new index file: %w", err)
+		}
+		return indexFile, nil
+	} else if err != nil {
+		return indexFile, fmt.Errorf("error checking index file: %w", err)
+	}
+
+	// Read existing index file
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
-		log.Error("Failed to read index.hcl", "error", err)
 		return indexFile, fmt.Errorf("error reading index.hcl: %w", err)
 	}
-	log.Info("Successfully read index.hcl", "bytes", len(data))
 
-	content := string(data)
-	configs := simpleHCLParser(content)
-
-	indexFile.Configs = make(map[string]Config)
-	for configName, files := range configs {
-		indexFile.Configs[configName] = Config{Files: files}
-		log.Info("Parsed config", "name", configName, "fileCount", len(files))
+	// Parse the HCL content
+	file, diags := hclsyntax.ParseConfig(data, indexPath, hcl.Pos{Line: 1, Column: 1})
+	if diags.HasErrors() {
+		return indexFile, fmt.Errorf("error parsing index.hcl: %s", diags)
 	}
 
-	log.Info("Finished parsing index.hcl", "configCount", len(indexFile.Configs))
+	// Extract data from HCL
+	content, _, diags := file.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "version"},
+			{Name: "last_updated"},
+		},
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "configs"},
+			{Type: "default_values"},
+		},
+	})
+	if diags.HasErrors() {
+		return indexFile, fmt.Errorf("error extracting content from index.hcl: %s", diags)
+	}
+
+	// Set version and last_updated
+	if attr, exists := content.Attributes["version"]; exists {
+		value, diags := attr.Expr.Value(nil)
+		if !diags.HasErrors() {
+			if value.Type() == cty.Number {
+				var version int64
+				err := gocty.FromCtyValue(value, &version)
+				if err == nil {
+					indexFile.Version = int(version)
+				}
+			}
+		}
+	}
+	if attr, exists := content.Attributes["last_updated"]; exists {
+		value, diags := attr.Expr.Value(nil)
+		if !diags.HasErrors() {
+			indexFile.LastUpdated = value.AsString()
+		}
+	}
+
+	// Parse configs and default_values
+	indexFile.Configs = make(map[string]Config)
+	indexFile.DefaultValues = make(map[string]string)
+	for _, block := range content.Blocks {
+		switch block.Type {
+		case "configs":
+			// Parse configs
+			configContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+				Blocks: []hcl.BlockHeaderSchema{{Type: "*"}},
+			})
+			if !diags.HasErrors() {
+				for _, configBlock := range configContent.Blocks {
+					var config Config
+					content, _, diags := configBlock.Body.PartialContent(&hcl.BodySchema{
+						Attributes: []hcl.AttributeSchema{{Name: "files"}},
+					})
+					if !diags.HasErrors() {
+						if attr, exists := content.Attributes["files"]; exists {
+							values, diags := attr.Expr.Value(nil)
+							if !diags.HasErrors() && values.Type().IsTupleType() {
+								it := values.ElementIterator()
+								for it.Next() {
+									_, v := it.Element()
+									config.Files = append(config.Files, v.AsString())
+								}
+							}
+						}
+					}
+					indexFile.Configs[configBlock.Type] = config
+				}
+			}
+		case "default_values":
+			// Parse default_values
+			defaultValuesContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+				Attributes: []hcl.AttributeSchema{{Name: "*"}},
+			})
+			if !diags.HasErrors() {
+				for name, attr := range defaultValuesContent.Attributes {
+					value, diags := attr.Expr.Value(nil)
+					if !diags.HasErrors() {
+						indexFile.DefaultValues[name] = value.AsString()
+					}
+				}
+			}
+		}
+	}
+
 	return indexFile, nil
 }
 
-func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
+func writeIndexFile(indexFile IndexFile) error {
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
 
+	f := hclwrite.NewEmptyFile()
+	rootBody := f.Body()
+
+	rootBody.SetAttributeValue("version", cty.NumberIntVal(int64(indexFile.Version)))
+	rootBody.SetAttributeValue("last_updated", cty.StringVal(indexFile.LastUpdated))
+
+	configsBlock := rootBody.AppendNewBlock("configs", nil)
+	configsBody := configsBlock.Body()
+	for k, v := range indexFile.Configs {
+		configBlock := configsBody.AppendNewBlock(k, nil)
+		fileValues := make([]cty.Value, len(v.Files))
+		for i, file := range v.Files {
+			fileValues[i] = cty.StringVal(filepath.ToSlash(file))
+		}
+		configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
+	}
+
+	defaultValuesBlock := rootBody.AppendNewBlock("default_values", nil)
+	defaultValuesBody := defaultValuesBlock.Body()
+	for k, v := range indexFile.DefaultValues {
+		defaultValuesBody.SetAttributeValue(k, cty.StringVal(v))
+	}
+
+	return os.WriteFile(indexPath, f.Bytes(), 0644)
+}
+
+func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 	// Update LastUpdated
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
 
@@ -973,41 +1103,13 @@ func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
 		},
 	}
 
-	// Create HCL file
-	f := hclwrite.NewEmptyFile()
-	rootBody := f.Body()
-
-	// Write version and last_updated
-	rootBody.SetAttributeValue("version", cty.NumberIntVal(int64(indexFile.Version)))
-	rootBody.SetAttributeValue("last_updated", cty.StringVal(indexFile.LastUpdated))
-
-	// Write configs
-	configsBlock := rootBody.AppendNewBlock("configs", nil)
-	configsBody := configsBlock.Body()
-	for k, v := range indexFile.Configs {
-		configBlock := configsBody.AppendNewBlock(k, nil)
-		fileValues := make([]cty.Value, len(v.Files))
-		for i, file := range v.Files {
-			// Use filepath.ToSlash to ensure consistent forward slashes
-			fileValues[i] = cty.StringVal(filepath.ToSlash(file))
-		}
-		configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
-	}
-
-	// Write default_values
-	defaultValuesBlock := rootBody.AppendNewBlock("default_values", nil)
-	defaultValuesBody := defaultValuesBlock.Body()
-	for k, v := range indexFile.DefaultValues {
-		defaultValuesBody.SetAttributeValue(k, cty.StringVal(v))
+	// Update default_values
+	for k, v := range config.Flags {
+		indexFile.DefaultValues[k] = v
 	}
 
 	// Write the updated index file
-	err := os.WriteFile(indexPath, f.Bytes(), 0644)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return writeIndexFile(indexFile)
 }
 
 func backupIndexFile(indexFile IndexFile) error {
