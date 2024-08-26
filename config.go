@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -24,7 +25,6 @@ func createConfig(config *CloudConfig) {
 
 	log.Info("Starting createConfig function")
 
-	// config := NewCloudConfig()
 	log.Info("CloudConfig initialized", "config", fmt.Sprintf("%+v", config))
 
 	defer func() {
@@ -32,7 +32,7 @@ func createConfig(config *CloudConfig) {
 	}()
 
 	if config.Flags == nil {
-		config.Flags = make(map[string]string)
+		config.Flags = &sync.Map{}
 		log.Info("Reinitializing config.Flags")
 	}
 
@@ -75,9 +75,6 @@ func createConfig(config *CloudConfig) {
 		log.Error("Error in initial config form", "error", err)
 		return
 	}
-
-	// Reinitialize Flags after the initial form
-	config.Flags = make(map[string]string)
 
 	// If the user didn't enter anything, use the default "K1"
 	if config.StaticPrefix == "" {
@@ -169,17 +166,11 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 
-	if config.Flags == nil {
-		log.Warn("config.Flags is nil, reinitializing")
-		config.Flags = make(map[string]string)
-	}
-
 	log.Info("Debug: Right before updating config.Flags in loop", "config", fmt.Sprintf("%+v", config))
-	for _, fi := range flagInputs {
-		log.Info("Debug: Updating flag", "name", fi.Name, "value", fi.Value)
-		config.Flags[fi.Name] = fi.Value
-		log.Info("Debug: After updating flag", "config", fmt.Sprintf("%+v", config))
-		indexFile.DefaultValues[fi.Name] = fi.Value
+	for i, fi := range flagInputs {
+		log.Info("Debug: Starting flag update", "index", i, "name", fi.Name, "value", fi.Value)
+		config.Flags.Store(fi.Name, fi.Value)
+		log.Info("Debug: After updating flag", "index", i, "config", fmt.Sprintf("%+v", config))
 
 		if fi.Name == "node-type" {
 			config.SelectedNodeType = fi.Value
@@ -188,7 +179,7 @@ func createConfig(config *CloudConfig) {
 			config.Region = fi.Value
 		}
 	}
-	log.Info("Debug: After updating config.Flags", "flags", fmt.Sprintf("%+v", config.Flags))
+	log.Info("Debug: After flag update loop", "config", fmt.Sprintf("%+v", config))
 
 	log.Info("After updating flags", "config", fmt.Sprintf("%+v", config))
 
@@ -324,19 +315,33 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 
 	// Add or update the new configuration
 	key := fmt.Sprintf("%s_%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
-	indexFile.Configs[key] = Config{
-		Files: []string{
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
-			filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
-		},
-		Flags: config.Flags,
+
+	// Initialize the Flags map if it doesn't exist
+	if indexFile.Configs[key].Flags == nil {
+		indexFile.Configs[key] = Config{
+			Files: []string{
+				filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
+				filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
+				filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
+			},
+			Flags: make(map[string]string),
+		}
 	}
 
+	// Update the Flags
+	config.Flags.Range(func(k, v interface{}) bool {
+		indexFile.Configs[key].Flags[k.(string)] = v.(string)
+		return true
+	})
+
 	// Update default values
-	for flag, value := range config.Flags {
-		indexFile.DefaultValues[flag] = value
+	if indexFile.DefaultValues == nil {
+		indexFile.DefaultValues = make(map[string]string)
 	}
+	config.Flags.Range(func(k, v interface{}) bool {
+		indexFile.DefaultValues[k.(string)] = v.(string)
+		return true
+	})
 
 	log.Info("Updated indexFile", "indexFile", fmt.Sprintf("%+v", indexFile))
 
@@ -499,6 +504,7 @@ func updateCloudsFile(config *CloudConfig, cloudsFile CloudsFile) error {
 
 	return nil
 }
+
 func generateFiles(config *CloudConfig, kubefirstPath string) error {
 	log.Info("Starting generateFiles function", "config", fmt.Sprintf("%+v", config))
 
@@ -540,10 +546,13 @@ func generateFiles(config *CloudConfig, kubefirstPath string) error {
 func generateEnvContent(config *CloudConfig) string {
 	var content strings.Builder
 	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
-	for flag, value := range config.Flags {
+	config.Flags.Range(func(k, v interface{}) bool {
+		flag := k.(string)
+		value := v.(string)
 		envVarName := fmt.Sprintf("%s_%s", prefix, strings.ToUpper(strings.ReplaceAll(flag, "-", "_")))
 		content.WriteString(fmt.Sprintf("export %s=\"%s\"\n", envVarName, value))
-	}
+		return true
+	})
 	return content.String()
 }
 
@@ -560,11 +569,13 @@ func generateKubefirstContent(config *CloudConfig, kubefirstPath string) string 
 	content.WriteString(fmt.Sprintf("%s %s create \\\n", kubefirstPath, strings.ToLower(config.CloudPrefix)))
 
 	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
-	flags := make([]string, 0, len(config.Flags))
-	for flag, _ := range config.Flags {
+	flags := make([]string, 0)
+	config.Flags.Range(func(k, v interface{}) bool {
+		flag := k.(string)
 		envVarName := fmt.Sprintf("%s_%s", prefix, strings.ToUpper(strings.ReplaceAll(flag, "-", "_")))
 		flags = append(flags, fmt.Sprintf("  --%s \"$%s\"", flag, envVarName))
-	}
+		return true
+	})
 
 	content.WriteString(strings.Join(flags, " \\\n"))
 	content.WriteString("\n")

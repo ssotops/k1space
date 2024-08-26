@@ -69,5 +69,5 @@ func initializeAndCleanup() error {
     
     // Create a new CloudConfig instance and pass its address
     config := NewCloudConfig()
-    return updateIndexFile(&config, indexFile)
+    return updateIndexFile(config, indexFile)
 }

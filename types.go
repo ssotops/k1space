@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/charmbracelet/lipgloss"
+  "sync"
 	"time"
 )
 
@@ -20,16 +21,16 @@ type CloudConfig struct {
 	StaticPrefix     string
 	CloudPrefix      string
 	Region           string
-	Flags            map[string]string
+	Flags            *sync.Map
 	SelectedNodeType string
 }
 
-func NewCloudConfig() CloudConfig {
-	return CloudConfig{
+func NewCloudConfig() *CloudConfig {
+	return &CloudConfig{
 		StaticPrefix:     "",
 		CloudPrefix:      "",
 		Region:           "",
-		Flags:            make(map[string]string),
+		Flags:            &sync.Map{},
 		SelectedNodeType: "",
 	}
 }

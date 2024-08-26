@@ -57,7 +57,7 @@ func runConfigMenu() {
 		switch selected {
 		case "Create Config":
 			config := NewCloudConfig()
-			createConfig(&config)
+			createConfig(config)
 		case "Back":
 			return
 		}
