@@ -34,30 +34,33 @@ func runMainMenu() string {
 }
 
 func runConfigMenu() {
-	var selected string
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Config Menu").
-				Options(
-					huh.NewOption("Create Config", "Create Config"),
-					huh.NewOption("Back", "Back"),
-				).
-				Value(&selected),
-		),
-	)
+	for {
+		var selected string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Config Menu").
+					Options(
+						huh.NewOption("Create Config", "Create Config"),
+						huh.NewOption("Back", "Back"),
+					).
+					Value(&selected),
+			),
+		)
 
-	err := form.Run()
-	if err != nil {
-		log.Error("Error running config menu", "error", err)
-		return
-	}
+		err := form.Run()
+		if err != nil {
+			log.Error("Error running config menu", "error", err)
+			return
+		}
 
-	switch selected {
-	case "Create Config":
-		createConfig()
-	case "Back":
-		return
+		switch selected {
+		case "Create Config":
+			config := NewCloudConfig()
+			createConfig(&config)
+		case "Back":
+			return
+		}
 	}
 }
 

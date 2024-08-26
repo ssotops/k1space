@@ -25,9 +25,13 @@ type CloudConfig struct {
 }
 
 func NewCloudConfig() CloudConfig {
-    return CloudConfig{
-        Flags: make(map[string]string),
-    }
+	return CloudConfig{
+		StaticPrefix:     "",
+		CloudPrefix:      "",
+		Region:           "",
+		Flags:            make(map[string]string),
+		SelectedNodeType: "",
+	}
 }
 
 type IndexFile struct {

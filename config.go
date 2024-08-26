@@ -16,10 +16,15 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-func createConfig() {
+func createConfig(config *CloudConfig) {
+	if config == nil {
+		log.Error("config is nil")
+		return
+	}
+
 	log.Info("Starting createConfig function")
 
-	config := NewCloudConfig()
+	// config := NewCloudConfig()
 	log.Info("CloudConfig initialized", "config", fmt.Sprintf("%+v", config))
 
 	defer func() {
@@ -164,12 +169,16 @@ func createConfig() {
 		return
 	}
 
-	log.Info("Config state after initial form", "config", fmt.Sprintf("%+v", config))
+	if config.Flags == nil {
+		log.Warn("config.Flags is nil, reinitializing")
+		config.Flags = make(map[string]string)
+	}
 
-	log.Info("Debug: Before updating config.Flags", "flags", fmt.Sprintf("%+v", config.Flags))
-	// Update config.Flags with the collected values
+	log.Info("Debug: Right before updating config.Flags in loop", "config", fmt.Sprintf("%+v", config))
 	for _, fi := range flagInputs {
+		log.Info("Debug: Updating flag", "name", fi.Name, "value", fi.Value)
 		config.Flags[fi.Name] = fi.Value
+		log.Info("Debug: After updating flag", "config", fmt.Sprintf("%+v", config))
 		indexFile.DefaultValues[fi.Name] = fi.Value
 
 		if fi.Name == "node-type" {
@@ -305,7 +314,7 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 	return nil
 }
 
-func updateIndexFile(config CloudConfig, indexFile IndexFile) error {
+func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 	log.Info("Starting updateIndexFile function", "config", fmt.Sprintf("%+v", config), "indexFile", fmt.Sprintf("%+v", indexFile))
 
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
@@ -438,17 +447,17 @@ func loadCloudsFile() (CloudsFile, error) {
 	return cloudsFile, nil
 }
 
-func updateCloudsFile(cloudConfig CloudConfig, cloudsFile CloudsFile) error {
+func updateCloudsFile(config *CloudConfig, cloudsFile CloudsFile) error {
 	cloudsPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "clouds.hcl")
 
 	// Update cloud regions
-	if _, exists := cloudsFile.CloudRegions[cloudConfig.CloudPrefix]; !exists {
-		cloudsFile.CloudRegions[cloudConfig.CloudPrefix] = []string{}
+	if _, exists := cloudsFile.CloudRegions[config.CloudPrefix]; !exists {
+		cloudsFile.CloudRegions[config.CloudPrefix] = []string{}
 	}
-	if !contains(cloudsFile.CloudRegions[cloudConfig.CloudPrefix], cloudConfig.Region) {
-		cloudsFile.CloudRegions[cloudConfig.CloudPrefix] = append(
-			cloudsFile.CloudRegions[cloudConfig.CloudPrefix],
-			cloudConfig.Region,
+	if !contains(cloudsFile.CloudRegions[config.CloudPrefix], config.Region) {
+		cloudsFile.CloudRegions[config.CloudPrefix] = append(
+			cloudsFile.CloudRegions[config.CloudPrefix],
+			config.Region,
 		)
 	}
 
@@ -490,8 +499,7 @@ func updateCloudsFile(cloudConfig CloudConfig, cloudsFile CloudsFile) error {
 
 	return nil
 }
-
-func generateFiles(config CloudConfig, kubefirstPath string) error {
+func generateFiles(config *CloudConfig, kubefirstPath string) error {
 	log.Info("Starting generateFiles function", "config", fmt.Sprintf("%+v", config))
 
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
@@ -529,7 +537,7 @@ func generateFiles(config CloudConfig, kubefirstPath string) error {
 	return nil
 }
 
-func generateEnvContent(config CloudConfig) string {
+func generateEnvContent(config *CloudConfig) string {
 	var content strings.Builder
 	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
 	for flag, value := range config.Flags {
@@ -545,7 +553,7 @@ op run --env-file="./.local.cloud.env" -- sh ./01-kubefirst-cloud.sh
 `
 }
 
-func generateKubefirstContent(config CloudConfig, kubefirstPath string) string {
+func generateKubefirstContent(config *CloudConfig, kubefirstPath string) string {
 	var content strings.Builder
 	content.WriteString("#!/bin/bash\n\n")
 	content.WriteString("./prepare/01-check-dependencies.sh\n\n")
