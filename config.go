@@ -721,17 +721,6 @@ func deleteConfig() {
 
 	fmt.Printf("Configuration '%s' has been deleted and backed up to %s\n", selectedConfig, backupDir)
 	log.Info("deleteConfig function completed successfully")
-
-	// Final confirmation
-	var finalConfirm bool
-	finalConfirmForm := huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("The configuration has been deleted. Press Enter to continue.").
-				Value(&finalConfirm),
-		),
-	)
-	finalConfirmForm.Run()
 }
 
 func listConfigs() {
