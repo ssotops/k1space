@@ -63,27 +63,18 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 	configsBody := configsBlock.Body()
 	for k, v := range indexFile.Configs {
 		configBlock := configsBody.AppendNewBlock(k, nil)
-		if len(v.Files) > 0 {
-			fileValues := make([]cty.Value, len(v.Files))
-			for i, file := range v.Files {
-				// Remove any existing quotes and escape characters
-				cleanedFile := strings.Trim(file, "\"\\")
-				// Convert to forward slashes for consistency
-				cleanedFile = filepath.ToSlash(cleanedFile)
-				fileValues[i] = cty.StringVal(cleanedFile)
-			}
-			configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
-		} else {
-			// If there are no files, set an empty list
-			configBlock.Body().SetAttributeValue("files", cty.ListValEmpty(cty.String))
-		}
+		configBody := configBlock.Body()
 
-		// Add flags as a new block
-		if len(v.Flags) > 0 {
-			flagsBlock := configBlock.Body().AppendNewBlock("flags", nil)
-			for flagKey, flagValue := range v.Flags {
-				flagsBlock.Body().SetAttributeValue(flagKey, cty.StringVal(flagValue))
-			}
+		fileValues := make([]cty.Value, len(v.Files))
+		for i, file := range v.Files {
+			fileValues[i] = cty.StringVal(file)
+		}
+		configBody.SetAttributeValue("files", cty.ListVal(fileValues))
+
+		flagsBlock := configBody.AppendNewBlock("flags", nil)
+		flagsBody := flagsBlock.Body()
+		for flagK, flagV := range v.Flags {
+			flagsBody.SetAttributeValue(flagK, cty.StringVal(flagV))
 		}
 	}
 
@@ -127,20 +118,26 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 			Flags: make(map[string]string),
 		}
 
-		// Update the Flags
-		config.Flags.Range(func(k, v interface{}) bool {
-			if v.(string) != "" {
-				newConfig.Flags[k.(string)] = v.(string)
-			}
-			return true
-		})
+		// Read the .local.cloud.env file
+		envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")
+		envContent, err := os.ReadFile(envFilePath)
+		if err != nil {
+			return fmt.Errorf("error reading .local.cloud.env: %w", err)
+		}
 
-		// Ensure all expected flags are present
-		expectedFlags := []string{"alerts-email", "cloud-region", "cluster-name", "domain-name", "github-org", "dns-provider", "node-type"}
-		for _, flag := range expectedFlags {
-			if _, exists := newConfig.Flags[flag]; !exists {
-				newConfig.Flags[flag] = ""
+		// Parse the environment variables
+		envVars := strings.Split(string(envContent), "\n")
+		for _, envVar := range envVars {
+			if strings.TrimSpace(envVar) == "" {
+				continue
 			}
+			parts := strings.SplitN(envVar, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			flagName := strings.TrimPrefix(parts[0], "export K1_"+strings.ToUpper(config.CloudPrefix)+"_"+strings.ToUpper(config.Region)+"_")
+			flagValue := strings.Trim(parts[1], "\"")
+			newConfig.Flags[strings.ToLower(flagName)] = flagValue
 		}
 
 		// Update or add the new configuration
@@ -156,20 +153,13 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 			}
 		}
 	}
-
-	// Clean up configs
-	for key, cfg := range indexFile.Configs {
-		if cfg.Flags == nil {
-			cfg.Flags = make(map[string]string)
+	// Add this new section here
+	for key := range indexFile.Configs {
+		parts := strings.Split(key, "_")
+		if len(parts) != 3 {
+			// Remove invalid configs
+			delete(indexFile.Configs, key)
 		}
-		// Ensure all expected flags are present for existing configs
-		expectedFlags := []string{"alerts-email", "cloud-region", "cluster-name", "domain-name", "github-org", "dns-provider", "node-type"}
-		for _, flag := range expectedFlags {
-			if _, exists := cfg.Flags[flag]; !exists {
-				cfg.Flags[flag] = ""
-			}
-		}
-		indexFile.Configs[key] = cfg
 	}
 
 	log.Info("Updated indexFile", "indexFile", fmt.Sprintf("%+v", indexFile))
@@ -183,45 +173,48 @@ func simpleHCLParser(content string) map[string]Config {
 	inConfigsBlock := false
 	currentConfig := ""
 	inFlagsBlock := false
+	nestedLevel := 0
 
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 		if trimmedLine == "configs {" {
 			inConfigsBlock = true
+			nestedLevel++
 			continue
 		}
 		if inConfigsBlock {
 			if strings.HasSuffix(trimmedLine, "{") {
-				currentConfig = strings.TrimSuffix(trimmedLine, " {")
-				configs[currentConfig] = Config{Files: []string{}, Flags: make(map[string]string)}
+				nestedLevel++
+				if nestedLevel == 2 {
+					currentConfig = strings.TrimSuffix(trimmedLine, " {")
+					configs[currentConfig] = Config{Files: []string{}, Flags: make(map[string]string)}
+				} else if nestedLevel == 3 && trimmedLine == "flags {" {
+					inFlagsBlock = true
+				}
 			} else if trimmedLine == "}" {
-				if inFlagsBlock {
-					inFlagsBlock = false
-				} else if currentConfig != "" {
+				nestedLevel--
+				if nestedLevel == 1 {
 					currentConfig = ""
-				} else {
+					inFlagsBlock = false
+				} else if nestedLevel == 0 {
 					inConfigsBlock = false
 				}
 			} else if strings.HasPrefix(trimmedLine, "files = [") {
 				files := strings.Trim(strings.TrimPrefix(trimmedLine, "files = ["), "]")
-				if files != "" {
+				if files != "" && currentConfig != "" {
 					filesList := strings.Split(files, ", ")
 					for i := range filesList {
 						filesList[i] = strings.Trim(filesList[i], "\"")
 					}
-					// Create a new Config struct with the updated Files slice
 					currentConfigStruct := configs[currentConfig]
 					currentConfigStruct.Files = append(currentConfigStruct.Files, filesList...)
 					configs[currentConfig] = currentConfigStruct
 				}
-			} else if trimmedLine == "flags {" {
-				inFlagsBlock = true
 			} else if inFlagsBlock && strings.Contains(trimmedLine, "=") {
 				parts := strings.SplitN(trimmedLine, "=", 2)
-				if len(parts) == 2 {
+				if len(parts) == 2 && currentConfig != "" {
 					key := strings.TrimSpace(parts[0])
 					value := strings.Trim(strings.TrimSpace(parts[1]), "\"")
-					// Create a new Config struct with the updated Flags map
 					currentConfigStruct := configs[currentConfig]
 					currentConfigStruct.Flags[key] = value
 					configs[currentConfig] = currentConfigStruct
