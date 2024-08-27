@@ -8,22 +8,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
 )
-
-type IndexFile struct {
-	Version       int
-	LastUpdated   string
-	Configs       map[string]Config
-	DefaultValues map[string]string
-}
-
-type Config struct {
-	Files []string
-	Flags map[string]string
-}
 
 func loadIndexFile() (IndexFile, error) {
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
