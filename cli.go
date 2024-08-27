@@ -131,7 +131,7 @@ func runKubefirstMenu() {
 		case "Sync Repositories":
 			syncKubefirstRepositories()
 		case "Setup Kubefirst":
-			handleKubefirstSetup()
+			runKubefirstSetup()
 		case "Back":
 			return
 		}

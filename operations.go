@@ -229,23 +229,8 @@ func syncKubefirstRepositories() {
 		return
 	}
 
-	var branch string
-	err = huh.NewInput().
-		Title("Enter the branch name to sync (default: main)").
-		Value(&branch).
-		Run()
-
-	if err != nil {
-		log.Error("Error getting branch name", "error", err)
-		return
-	}
-
-	if branch == "" {
-		branch = "main"
-	}
-
 	summary := make([][]string, 0, len(repos)+1)
-	summary = append(summary, []string{"Repository", "Path", "Branch", "Status"})
+	summary = append(summary, []string{"Repository", "Path", "Current Branch", "Status"})
 
 	for _, repo := range repos {
 		if !repo.IsDir() {
@@ -255,6 +240,14 @@ func syncKubefirstRepositories() {
 		repoPath := filepath.Join(repoDir, repo.Name())
 		fmt.Printf("Syncing %s...\n", repo.Name())
 
+		// Get current branch
+		branch, err := getCurrentBranch(repoPath)
+		if err != nil {
+			log.Error("Error getting current branch", "repo", repo.Name(), "error", err)
+			summary = append(summary, []string{repo.Name(), repoPath, "Unknown", "Failed to get branch"})
+			continue
+		}
+
 		status := syncRepository(repoPath, branch)
 		summary = append(summary, []string{repo.Name(), repoPath, branch, status})
 		fmt.Printf("Repository %s sync complete\n", repo.Name())
@@ -263,16 +256,16 @@ func syncKubefirstRepositories() {
 	printSummaryTable(summary)
 }
 
-func handleKubefirstSetup() {
-	err := runKubefirstSetup()
-	if err != nil {
-		log.Error("Error in Kubefirst setup", "error", err)
-	} else {
-		fmt.Println("Kubefirst setup completed successfully!")
-	}
-}
-
 // Helper functions
+
+func getCurrentBranch(repoPath string) (string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("error getting current branch: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
 
 func printSummaryTable(summary [][]string) {
 	fmt.Println(style.Render("\nRepository Setup Summary:"))
@@ -469,15 +462,7 @@ func syncRepository(repoPath, branch string) string {
 		return "Failed to fetch"
 	}
 
-	// Check out the specified branch
-	cmd = exec.Command("git", "-C", repoPath, "checkout", branch)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Error("Error checking out branch", "repo", repoPath, "branch", branch, "error", err, "output", string(output))
-		return "Failed to checkout branch"
-	}
-
-	// Pull the latest changes
+	// Pull the latest changes for the current branch
 	cmd = exec.Command("git", "-C", repoPath, "pull", "origin", branch)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
