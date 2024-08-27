@@ -638,17 +638,17 @@ func contains(slice []string, item string) bool {
 }
 
 func promptKubefirstBinary() (string, error) {
-	var useGlobal bool
+	var useLocal bool
 	err := huh.NewConfirm().
-		Title("Do you want to use the global kubefirst installation?").
-		Value(&useGlobal).
+		Title("Do you want to use a local kubefirst installation? (No for global)").
+		Value(&useLocal).
 		Run()
 
 	if err != nil {
 		return "", err
 	}
 
-	if useGlobal {
+	if !useLocal {
 		path, err := exec.LookPath("kubefirst")
 		if err != nil {
 			return "", fmt.Errorf("global kubefirst not found: %w", err)
@@ -657,28 +657,72 @@ func promptKubefirstBinary() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error getting kubefirst version: %w", err)
 		}
-		fmt.Printf("Using global kubefirst: %s\nVersion: %s\n", path, version)
+		fmt.Printf("Using global kubefirst: %s\nVersion: %s\n", path, string(version))
 		return path, nil
 	}
 
-	var localPath string
-	err = huh.NewInput().
-		Title("Enter the path to the local kubefirst binary").
-		Value(&localPath).
+	// Local option sub-menu
+	var localOption string
+	err = huh.NewSelect[string]().
+		Title("Choose the local kubefirst option:").
+		Options(
+			huh.NewOption("Use ~/.ssot/k1space/.repositories/kubefirst/kubefirst", "repo"),
+			huh.NewOption("Specify a custom path", "custom"),
+		).
+		Value(&localOption).
 		Run()
 
 	if err != nil {
 		return "", err
 	}
 
-	return localPath, nil
+	switch localOption {
+	case "repo":
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("error getting user home directory: %w", err)
+		}
+		repoPath := filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst", "kubefirst")
+
+		// Check if the file exists
+		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+			return "", fmt.Errorf("kubefirst binary not found at %s", repoPath)
+		}
+
+		log.Info("Using kubefirst binary from repository", "path", repoPath)
+
+		// Return the absolute path
+		return repoPath, nil
+	case "custom":
+		var customPath string
+		err = huh.NewInput().
+			Title("Enter the path to the local kubefirst binary").
+			Value(&customPath).
+			Run()
+
+		if err != nil {
+			return "", err
+		}
+
+		// Check if the file exists
+		if _, err := os.Stat(customPath); os.IsNotExist(err) {
+			return "", fmt.Errorf("kubefirst binary not found at %s", customPath)
+		}
+
+		log.Info("Using custom kubefirst binary", "path", customPath)
+		return customPath, nil
+	default:
+		return "", fmt.Errorf("invalid local option selected")
+	}
 }
 
 func fetchKubefirstFlags(kubefirstPath, cloudProvider string) (map[string]string, error) {
 	cmd := exec.Command(kubefirstPath, strings.ToLower(cloudProvider), "create", "--help")
-	output, err := cmd.Output()
+	log.Info("Executing kubefirst command", "path", kubefirstPath, "args", cmd.Args)
+
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("error running kubefirst help: %w", err)
+		return nil, fmt.Errorf("error running kubefirst help: %w\nOutput: %s", err, string(output))
 	}
 
 	flags := make(map[string]string)
