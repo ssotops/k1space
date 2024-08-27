@@ -760,3 +760,62 @@ func listConfigs() {
 	fmt.Print("\nPress Enter to continue...")
 	fmt.Scanln()
 }
+
+func deleteAllConfigs() {
+	log.Info("Starting deleteAllConfigs function")
+
+	// Confirm with the user
+	var confirmDelete bool
+	confirmForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Are you sure you want to delete all configurations? This action cannot be undone.").
+				Value(&confirmDelete),
+		),
+	)
+
+	err := confirmForm.Run()
+	if err != nil {
+		log.Error("Error in delete confirmation", "error", err)
+		return
+	}
+
+	if !confirmDelete {
+		fmt.Println("Deletion cancelled.")
+		return
+	}
+
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+
+	// Delete index.hcl
+	indexPath := filepath.Join(baseDir, "index.hcl")
+	err = os.Remove(indexPath)
+	if err != nil && !os.IsNotExist(err) {
+		log.Error("Error deleting index.hcl", "error", err)
+	} else {
+		log.Info("Deleted index.hcl")
+	}
+
+	// Delete clouds.hcl
+	cloudsPath := filepath.Join(baseDir, "clouds.hcl")
+	err = os.Remove(cloudsPath)
+	if err != nil && !os.IsNotExist(err) {
+		log.Error("Error deleting clouds.hcl", "error", err)
+	} else {
+		log.Info("Deleted clouds.hcl")
+	}
+
+	// Delete cloud provider directories
+	for _, provider := range cloudProviders {
+		providerPath := filepath.Join(baseDir, strings.ToLower(provider))
+		err = os.RemoveAll(providerPath)
+		if err != nil {
+			log.Error("Error deleting cloud provider directory", "provider", provider, "error", err)
+		} else {
+			log.Info("Deleted cloud provider directory", "provider", provider)
+		}
+	}
+
+	fmt.Println("All configurations have been deleted.")
+	log.Info("deleteAllConfigs function completed successfully")
+}
