@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -255,14 +254,25 @@ func downloadBinary(url string) (string, error) {
 	return tempFile.Name(), nil
 }
 
-// Helper function to check if a directory is empty
+func deleteEmptyDirs(dir string) {
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if isEmpty(path) {
+				os.Remove(path)
+				log.Info("Deleted empty directory", "path", path)
+			}
+		}
+		return nil
+	})
+}
+
 func isEmpty(dir string) bool {
-	f, err := os.Open(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
 	}
-	defer f.Close()
-
-	_, err = f.Readdirnames(1)
-	return err == io.EOF
+	return len(entries) == 0
 }

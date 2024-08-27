@@ -44,6 +44,7 @@ func runConfigMenu() {
 						huh.NewOption("List Configs", "List Configs"),
 						huh.NewOption("Create Config", "Create Config"),
 						huh.NewOption("Delete Config", "Delete Config"),
+						huh.NewOption("Delete All Configs", "Delete All Configs"),
 						huh.NewOption("Back", "Back"),
 					).
 					Value(&selected),
@@ -63,6 +64,8 @@ func runConfigMenu() {
 			createConfig(&CloudConfig{})
 		case "Delete Config":
 			deleteConfig()
+		case "Delete All Configs":
+			deleteAllConfigs()
 		case "Back":
 			return
 		}

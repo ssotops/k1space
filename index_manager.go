@@ -41,10 +41,9 @@ func loadIndexFile() (IndexFile, error) {
 	content := string(data)
 	configs := simpleHCLParser(content)
 
-	indexFile.Configs = make(map[string]Config)
-	for configName, files := range configs {
-		indexFile.Configs[configName] = Config{Files: files}
-		log.Info("Parsed config", "name", configName, "fileCount", len(files))
+	indexFile.Configs = configs
+	for configName, config := range configs {
+		log.Info("Parsed config", "name", configName, "fileCount", len(config.Files))
 	}
 
 	cleanupIndexFile(&indexFile)
@@ -64,15 +63,28 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 	configsBody := configsBlock.Body()
 	for k, v := range indexFile.Configs {
 		configBlock := configsBody.AppendNewBlock(k, nil)
-		fileValues := make([]cty.Value, len(v.Files))
-		for i, file := range v.Files {
-			// Remove any existing quotes and escape characters
-			cleanedFile := strings.Trim(file, "\"\\")
-			// Convert to forward slashes for consistency
-			cleanedFile = filepath.ToSlash(cleanedFile)
-			fileValues[i] = cty.StringVal(cleanedFile)
+		if len(v.Files) > 0 {
+			fileValues := make([]cty.Value, len(v.Files))
+			for i, file := range v.Files {
+				// Remove any existing quotes and escape characters
+				cleanedFile := strings.Trim(file, "\"\\")
+				// Convert to forward slashes for consistency
+				cleanedFile = filepath.ToSlash(cleanedFile)
+				fileValues[i] = cty.StringVal(cleanedFile)
+			}
+			configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
+		} else {
+			// If there are no files, set an empty list
+			configBlock.Body().SetAttributeValue("files", cty.ListValEmpty(cty.String))
 		}
-		configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
+
+		// Add flags as a new block
+		if len(v.Flags) > 0 {
+			flagsBlock := configBlock.Body().AppendNewBlock("flags", nil)
+			for flagKey, flagValue := range v.Flags {
+				flagsBlock.Body().SetAttributeValue(flagKey, cty.StringVal(flagValue))
+			}
+		}
 	}
 
 	defaultValuesBlock := rootBody.AppendNewBlock("default_values", nil)
@@ -115,53 +127,49 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 			Flags: make(map[string]string),
 		}
 
-		if existingConfig, exists := indexFile.Configs[key]; exists {
-			// Clean up existing file paths
-			for i, file := range existingConfig.Files {
-				newConfig.Files[i] = filepath.ToSlash(strings.Trim(file, "\"\\"))
-			}
-			// Copy existing flags
-			for k, v := range existingConfig.Flags {
-				newConfig.Flags[k] = v
-			}
-		}
-
-		// Update the Flags if config.Flags is not nil
-		if config.Flags != nil {
-			config.Flags.Range(func(k, v interface{}) bool {
+		// Update the Flags
+		config.Flags.Range(func(k, v interface{}) bool {
+			if v.(string) != "" {
 				newConfig.Flags[k.(string)] = v.(string)
-				return true
-			})
+			}
+			return true
+		})
+
+		// Ensure all expected flags are present
+		expectedFlags := []string{"alerts-email", "cloud-region", "cluster-name", "domain-name", "github-org", "dns-provider", "node-type"}
+		for _, flag := range expectedFlags {
+			if _, exists := newConfig.Flags[flag]; !exists {
+				newConfig.Flags[flag] = ""
+			}
 		}
 
-		// Assign the new or updated config back to the map
+		// Update or add the new configuration
 		indexFile.Configs[key] = newConfig
 
 		// Update default values
 		if indexFile.DefaultValues == nil {
 			indexFile.DefaultValues = make(map[string]string)
 		}
-		if config.Flags != nil {
-			config.Flags.Range(func(k, v interface{}) bool {
-				indexFile.DefaultValues[k.(string)] = v.(string)
-				return true
-			})
+		for k, v := range newConfig.Flags {
+			if v != "" {
+				indexFile.DefaultValues[k] = v
+			}
 		}
 	}
 
-	// Clean up all file paths in the index file
-	for configKey, config := range indexFile.Configs {
-		cleanedConfig := Config{
-			Files: make([]string, len(config.Files)),
-			Flags: make(map[string]string),
+	// Clean up configs
+	for key, cfg := range indexFile.Configs {
+		if cfg.Flags == nil {
+			cfg.Flags = make(map[string]string)
 		}
-		for i, file := range config.Files {
-			cleanedConfig.Files[i] = filepath.ToSlash(strings.Trim(file, "\"\\"))
+		// Ensure all expected flags are present for existing configs
+		expectedFlags := []string{"alerts-email", "cloud-region", "cluster-name", "domain-name", "github-org", "dns-provider", "node-type"}
+		for _, flag := range expectedFlags {
+			if _, exists := cfg.Flags[flag]; !exists {
+				cfg.Flags[flag] = ""
+			}
 		}
-		for k, v := range config.Flags {
-			cleanedConfig.Flags[k] = v
-		}
-		indexFile.Configs[configKey] = cleanedConfig
+		indexFile.Configs[key] = cfg
 	}
 
 	log.Info("Updated indexFile", "indexFile", fmt.Sprintf("%+v", indexFile))
@@ -169,11 +177,12 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 	return createOrUpdateIndexFile(indexPath, indexFile)
 }
 
-func simpleHCLParser(content string) map[string][]string {
-	configs := make(map[string][]string)
+func simpleHCLParser(content string) map[string]Config {
+	configs := make(map[string]Config)
 	lines := strings.Split(content, "\n")
 	inConfigsBlock := false
 	currentConfig := ""
+	inFlagsBlock := false
 
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
@@ -184,16 +193,39 @@ func simpleHCLParser(content string) map[string][]string {
 		if inConfigsBlock {
 			if strings.HasSuffix(trimmedLine, "{") {
 				currentConfig = strings.TrimSuffix(trimmedLine, " {")
-				configs[currentConfig] = []string{}
+				configs[currentConfig] = Config{Files: []string{}, Flags: make(map[string]string)}
 			} else if trimmedLine == "}" {
-				if currentConfig != "" {
+				if inFlagsBlock {
+					inFlagsBlock = false
+				} else if currentConfig != "" {
 					currentConfig = ""
 				} else {
 					inConfigsBlock = false
 				}
 			} else if strings.HasPrefix(trimmedLine, "files = [") {
 				files := strings.Trim(strings.TrimPrefix(trimmedLine, "files = ["), "]")
-				configs[currentConfig] = append(configs[currentConfig], strings.Split(files, ", ")...)
+				if files != "" {
+					filesList := strings.Split(files, ", ")
+					for i := range filesList {
+						filesList[i] = strings.Trim(filesList[i], "\"")
+					}
+					// Create a new Config struct with the updated Files slice
+					currentConfigStruct := configs[currentConfig]
+					currentConfigStruct.Files = append(currentConfigStruct.Files, filesList...)
+					configs[currentConfig] = currentConfigStruct
+				}
+			} else if trimmedLine == "flags {" {
+				inFlagsBlock = true
+			} else if inFlagsBlock && strings.Contains(trimmedLine, "=") {
+				parts := strings.SplitN(trimmedLine, "=", 2)
+				if len(parts) == 2 {
+					key := strings.TrimSpace(parts[0])
+					value := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+					// Create a new Config struct with the updated Flags map
+					currentConfigStruct := configs[currentConfig]
+					currentConfigStruct.Flags[key] = value
+					configs[currentConfig] = currentConfigStruct
+				}
 			}
 		}
 	}
