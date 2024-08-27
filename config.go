@@ -83,6 +83,14 @@ func createConfig(config *CloudConfig) {
 
 	log.Info("Initial form completed", "StaticPrefix", config.StaticPrefix, "CloudPrefix", config.CloudPrefix)
 
+	// Check for required tokens
+	tokenExists, message := checkRequiredTokens(config.CloudPrefix)
+	if !tokenExists {
+		log.Error("Missing required token", "cloud", config.CloudPrefix)
+		fmt.Println(message)
+		return
+	}
+
 	// Update cloud regions and node types
 	if config.CloudPrefix == "DigitalOcean" {
 		err = updateDigitalOceanRegions(&cloudsFile)

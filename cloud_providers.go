@@ -185,3 +185,37 @@ func getNodeTypeOptions(cloudProvider string, cloudsFile CloudsFile) []huh.Optio
 	}
 	return options
 }
+
+func checkRequiredTokens(cloudProvider string) (bool, string) {
+    var tokenName, instructions string
+    var tokenExists bool
+
+    switch cloudProvider {
+    case "Civo":
+        tokenName = "CIVO_TOKEN"
+        instructions = "You can create a new Civo API token at https://www.civo.com/account/security"
+    case "DigitalOcean":
+        tokenName = "DIGITALOCEAN_TOKEN"
+        instructions = "You can create a new DigitalOcean API token at https://cloud.digitalocean.com/account/api/tokens"
+    default:
+        return true, ""
+    }
+
+    tokenExists = os.Getenv(tokenName) != ""
+    message := fmt.Sprintf(`
+╔════════════════════════════════════════════════════════════════════════════╗
+║ Missing Required Token: %s                                                 
+║────────────────────────────────────────────────────────────────────────────
+║ The %s environment variable is not set.
+║ 
+║ To set it, run the following command in your terminal:
+║ export %s=your_token_here
+║ 
+║ %s
+║ 
+║ After setting the token, please restart k1space.
+╚════════════════════════════════════════════════════════════════════════════╝
+`, tokenName, tokenName, tokenName, instructions)
+
+    return tokenExists, message
+}
