@@ -314,34 +314,40 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)
 
 	// Add or update the new configuration
-	key := fmt.Sprintf("%s_%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
+	if config.CloudPrefix != "" && config.Region != "" && config.StaticPrefix != "" {
+		key := fmt.Sprintf("%s_%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
 
-	// Initialize the Flags map if it doesn't exist
-	if indexFile.Configs[key].Flags == nil {
-		indexFile.Configs[key] = Config{
-			Files: []string{
-				filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
-				filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
-				filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
-			},
-			Flags: make(map[string]string),
+		// Initialize the Flags map if it doesn't exist
+		if indexFile.Configs[key].Flags == nil {
+			indexFile.Configs[key] = Config{
+				Files: []string{
+					filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
+					filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
+					filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
+				},
+				Flags: make(map[string]string),
+			}
+		}
+
+		// Update the Flags if config.Flags is not nil
+		if config.Flags != nil {
+			config.Flags.Range(func(k, v interface{}) bool {
+				indexFile.Configs[key].Flags[k.(string)] = v.(string)
+				return true
+			})
+		}
+
+		// Update default values
+		if indexFile.DefaultValues == nil {
+			indexFile.DefaultValues = make(map[string]string)
+		}
+		if config.Flags != nil {
+			config.Flags.Range(func(k, v interface{}) bool {
+				indexFile.DefaultValues[k.(string)] = v.(string)
+				return true
+			})
 		}
 	}
-
-	// Update the Flags
-	config.Flags.Range(func(k, v interface{}) bool {
-		indexFile.Configs[key].Flags[k.(string)] = v.(string)
-		return true
-	})
-
-	// Update default values
-	if indexFile.DefaultValues == nil {
-		indexFile.DefaultValues = make(map[string]string)
-	}
-	config.Flags.Range(func(k, v interface{}) bool {
-		indexFile.DefaultValues[k.(string)] = v.(string)
-		return true
-	})
 
 	log.Info("Updated indexFile", "indexFile", fmt.Sprintf("%+v", indexFile))
 
@@ -708,4 +714,115 @@ func cleanupIndexFile(indexFile *IndexFile) {
 		}
 		indexFile.Configs[configName] = Config{Files: cleanedFiles, Flags: config.Flags}
 	}
+}
+
+func deleteConfig() {
+	log.Info("Starting deleteConfig function")
+
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		log.Error("Error loading index file", "error", err)
+		fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+		return
+	}
+
+	if len(indexFile.Configs) == 0 {
+		fmt.Println("No configurations found to delete.")
+		return
+	}
+
+	var selectedConfig string
+	configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
+	for config := range indexFile.Configs {
+		configOptions = append(configOptions, huh.NewOption(config, config))
+	}
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a configuration to delete").
+				Options(configOptions...).
+				Value(&selectedConfig),
+		),
+	)
+
+	err = form.Run()
+	if err != nil {
+		log.Error("Error in config selection", "error", err)
+		return
+	}
+
+	var confirmDelete bool
+	confirmForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(fmt.Sprintf("Are you sure you want to delete the configuration '%s'?", selectedConfig)).
+				Value(&confirmDelete),
+		),
+	)
+
+	err = confirmForm.Run()
+	if err != nil {
+		log.Error("Error in delete confirmation", "error", err)
+		return
+	}
+
+	if !confirmDelete {
+		fmt.Println("Deletion cancelled.")
+		return
+	}
+
+	// Extract cloud, region, and prefix from the selected config
+	parts := strings.Split(selectedConfig, "_")
+	if len(parts) != 3 {
+		log.Error("Invalid config name format", "config", selectedConfig)
+		fmt.Println("Invalid configuration name format. Deletion cancelled.")
+		return
+	}
+	cloud, region, prefix := parts[0], parts[1], parts[2]
+
+	// Create .cache directory if it doesn't exist
+	cacheDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", ".cache")
+	err = os.MkdirAll(cacheDir, 0755)
+	if err != nil {
+		log.Error("Error creating .cache directory", "error", err)
+		fmt.Println("Failed to create .cache directory. Deletion cancelled.")
+		return
+	}
+
+	// Backup the config directory
+	sourceDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", cloud, region, prefix)
+	backupDir := filepath.Join(cacheDir, fmt.Sprintf("%s_%s", selectedConfig, time.Now().Format("20060102_150405")))
+
+	err = os.Rename(sourceDir, backupDir)
+	if err != nil {
+		log.Error("Error backing up config directory", "error", err)
+		fmt.Println("Failed to backup configuration directory. Deletion cancelled.")
+		return
+	}
+
+	// Delete the config from index.hcl
+	delete(indexFile.Configs, selectedConfig)
+	err = updateIndexFile(&CloudConfig{Flags: &sync.Map{}}, indexFile)
+	if err != nil {
+		log.Error("Error updating index file", "error", err)
+		fmt.Printf("Failed to update index file. The configuration '%s' has been backed up but not removed from the index.\n", selectedConfig)
+		// Attempt to restore the backed up directory
+		os.Rename(backupDir, sourceDir)
+		return
+	}
+
+	fmt.Printf("Configuration '%s' has been deleted and backed up to %s\n", selectedConfig, backupDir)
+	log.Info("deleteConfig function completed successfully")
+
+	// Final confirmation
+	var finalConfirm bool
+	finalConfirmForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("The configuration has been deleted. Press Enter to continue.").
+				Value(&finalConfirm),
+		),
+	)
+	finalConfirmForm.Run()
 }
