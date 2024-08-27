@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/log"
 	"github.com/civo/civogo"
 	"github.com/digitalocean/godo"
+	"github.com/hashicorp/hcl/v2/hclsimple"
 )
+
+var useCachedData bool
 
 func getCivoClient() (*civogo.Client, error) {
 	token := os.Getenv("CIVO_TOKEN")
@@ -21,6 +26,10 @@ func getCivoClient() (*civogo.Client, error) {
 }
 
 func updateCivoRegions(cloudsFile *CloudsFile) error {
+	if useCachedData {
+		return updateCivoRegionsFromCache(cloudsFile)
+	}
+
 	client, err := getCivoClient()
 	if err != nil {
 		return err
@@ -41,6 +50,10 @@ func updateCivoRegions(cloudsFile *CloudsFile) error {
 }
 
 func updateCivoNodeTypes(cloudsFile *CloudsFile) error {
+	if useCachedData {
+		return updateCivoNodeTypesFromCache(cloudsFile)
+	}
+
 	client, err := getCivoClient()
 	if err != nil {
 		return err
@@ -74,6 +87,9 @@ func getDigitalOceanClient() (*godo.Client, error) {
 }
 
 func updateDigitalOceanRegions(cloudsFile *CloudsFile) error {
+	if useCachedData {
+		return updateDigitalOceanRegionsFromCache(cloudsFile)
+	}
 	client, err := getDigitalOceanClient()
 	if err != nil {
 		return err
@@ -100,6 +116,9 @@ func updateDigitalOceanRegions(cloudsFile *CloudsFile) error {
 }
 
 func updateDigitalOceanNodeTypes(cloudsFile *CloudsFile) error {
+	if useCachedData {
+		return updateDigitalOceanNodeTypesFromCache(cloudsFile)
+	}
 	client, err := getDigitalOceanClient()
 	if err != nil {
 		return err
@@ -187,22 +206,61 @@ func getNodeTypeOptions(cloudProvider string, cloudsFile CloudsFile) []huh.Optio
 }
 
 func checkRequiredTokens(cloudProvider string) (bool, string) {
-    var tokenName, instructions string
-    var tokenExists bool
+	var tokenName, instructions string
+	var tokenExists bool
 
-    switch cloudProvider {
-    case "Civo":
-        tokenName = "CIVO_TOKEN"
-        instructions = "You can create a new Civo API token at https://www.civo.com/account/security"
-    case "DigitalOcean":
-        tokenName = "DIGITALOCEAN_TOKEN"
-        instructions = "You can create a new DigitalOcean API token at https://cloud.digitalocean.com/account/api/tokens"
-    default:
-        return true, ""
-    }
+	switch cloudProvider {
+	case "Civo":
+		tokenName = "CIVO_TOKEN"
+		instructions = "You can create a new Civo API token at https://www.civo.com/account/security"
+	case "DigitalOcean":
+		tokenName = "DIGITALOCEAN_TOKEN"
+		instructions = "You can create a new DigitalOcean API token at https://cloud.digitalocean.com/account/api/tokens"
+	default:
+		return true, ""
+	}
 
-    tokenExists = os.Getenv(tokenName) != ""
-    message := fmt.Sprintf(`
+	tokenExists = os.Getenv(tokenName) != ""
+
+	if !tokenExists {
+		// Check if cached data is available
+		cachedDataAvailable := checkCachedDataAvailable()
+
+		var choice string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title(fmt.Sprintf("The %s environment variable is not set. What would you like to do?", tokenName)).
+					Options(
+						huh.NewOption("Use cached data (if available)", "cached"),
+						huh.NewOption("See instructions for configuring cloud tokens", "instructions"),
+					).
+					Value(&choice),
+			),
+		)
+
+		err := form.Run()
+		if err != nil {
+			log.Error("Error in user prompt", "error", err)
+			return false, ""
+		}
+
+		switch choice {
+		case "cached":
+			if cachedDataAvailable {
+				log.Info("Using cached data from clouds.hcl")
+				useCachedData = true
+				return true, ""
+			} else {
+				log.Warn("No cached data available in clouds.hcl")
+				// Fall through to show instructions
+			}
+		case "instructions":
+			// Fall through to show instructions
+		}
+	}
+
+	message := fmt.Sprintf(`
 ╔════════════════════════════════════════════════════════════════════════════╗
 ║ Missing Required Token: %s                                                 
 ║────────────────────────────────────────────────────────────────────────────
@@ -217,5 +275,60 @@ func checkRequiredTokens(cloudProvider string) (bool, string) {
 ╚════════════════════════════════════════════════════════════════════════════╝
 `, tokenName, tokenName, tokenName, instructions)
 
-    return tokenExists, message
+	return tokenExists, message
+}
+
+func checkCachedDataAvailable() bool {
+	cloudsHCLPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "clouds.hcl")
+	_, err := os.Stat(cloudsHCLPath)
+	return !os.IsNotExist(err)
+}
+
+func updateDigitalOceanRegionsFromCache(cloudsFile *CloudsFile) error {
+	cachedData, err := loadCachedData()
+	if err != nil {
+		return err
+	}
+
+	cloudsFile.CloudRegions["DigitalOcean"] = cachedData.CloudRegions["DigitalOcean"]
+	return nil
+}
+
+func updateDigitalOceanNodeTypesFromCache(cloudsFile *CloudsFile) error {
+	cachedData, err := loadCachedData()
+	if err != nil {
+		return err
+	}
+
+	cloudsFile.CloudNodeTypes["DigitalOcean"] = cachedData.CloudNodeTypes["DigitalOcean"]
+	return nil
+}
+func loadCachedData() (*CloudsFile, error) {
+	cloudsHCLPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "clouds.hcl")
+	var cachedData CloudsFile
+	err := hclsimple.DecodeFile(cloudsHCLPath, nil, &cachedData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode clouds.hcl: %w", err)
+	}
+	return &cachedData, nil
+}
+
+func updateCivoRegionsFromCache(cloudsFile *CloudsFile) error {
+	cachedData, err := loadCachedData()
+	if err != nil {
+		return err
+	}
+
+	cloudsFile.CloudRegions["Civo"] = cachedData.CloudRegions["Civo"]
+	return nil
+}
+
+func updateCivoNodeTypesFromCache(cloudsFile *CloudsFile) error {
+	cachedData, err := loadCachedData()
+	if err != nil {
+		return err
+	}
+
+	cloudsFile.CloudNodeTypes["Civo"] = cachedData.CloudNodeTypes["Civo"]
+	return nil
 }
