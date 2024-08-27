@@ -253,5 +253,3 @@ func downloadBinary(url string) (string, error) {
 
 	return tempFile.Name(), nil
 }
-
-// Add any other utility functions here

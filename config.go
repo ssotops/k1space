@@ -264,6 +264,8 @@ func loadIndexFile() (IndexFile, error) {
 		log.Info("Parsed config", "name", configName, "fileCount", len(files))
 	}
 
+	cleanupIndexFile(&indexFile)
+
 	log.Info("Finished parsing index.hcl", "configCount", len(indexFile.Configs))
 	return indexFile, nil
 }
@@ -281,7 +283,11 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 		configBlock := configsBody.AppendNewBlock(k, nil)
 		fileValues := make([]cty.Value, len(v.Files))
 		for i, file := range v.Files {
-			fileValues[i] = cty.StringVal(filepath.ToSlash(file))
+			// Remove any existing quotes and escape characters
+			cleanedFile := strings.Trim(file, "\"\\")
+			// Convert to forward slashes for consistency
+			cleanedFile = filepath.ToSlash(cleanedFile)
+			fileValues[i] = cty.StringVal(cleanedFile)
 		}
 		configBlock.Body().SetAttributeValue("files", cty.ListVal(fileValues))
 	}
@@ -317,25 +323,36 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 	if config.CloudPrefix != "" && config.Region != "" && config.StaticPrefix != "" {
 		key := fmt.Sprintf("%s_%s_%s", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
 
-		// Initialize the Flags map if it doesn't exist
-		if indexFile.Configs[key].Flags == nil {
-			indexFile.Configs[key] = Config{
-				Files: []string{
-					filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh")),
-					filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh")),
-					filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")),
-				},
-				Flags: make(map[string]string),
+		newConfig := Config{
+			Files: []string{
+				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh")),
+				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh")),
+				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")),
+			},
+			Flags: make(map[string]string),
+		}
+
+		if existingConfig, exists := indexFile.Configs[key]; exists {
+			// Clean up existing file paths
+			for i, file := range existingConfig.Files {
+				newConfig.Files[i] = filepath.ToSlash(strings.Trim(file, "\"\\"))
+			}
+			// Copy existing flags
+			for k, v := range existingConfig.Flags {
+				newConfig.Flags[k] = v
 			}
 		}
 
 		// Update the Flags if config.Flags is not nil
 		if config.Flags != nil {
 			config.Flags.Range(func(k, v interface{}) bool {
-				indexFile.Configs[key].Flags[k.(string)] = v.(string)
+				newConfig.Flags[k.(string)] = v.(string)
 				return true
 			})
 		}
+
+		// Assign the new or updated config back to the map
+		indexFile.Configs[key] = newConfig
 
 		// Update default values
 		if indexFile.DefaultValues == nil {
@@ -347,6 +364,21 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 				return true
 			})
 		}
+	}
+
+	// Clean up all file paths in the index file
+	for configKey, config := range indexFile.Configs {
+		cleanedConfig := Config{
+			Files: make([]string, len(config.Files)),
+			Flags: make(map[string]string),
+		}
+		for i, file := range config.Files {
+			cleanedConfig.Files[i] = filepath.ToSlash(strings.Trim(file, "\"\\"))
+		}
+		for k, v := range config.Flags {
+			cleanedConfig.Flags[k] = v
+		}
+		indexFile.Configs[configKey] = cleanedConfig
 	}
 
 	log.Info("Updated indexFile", "indexFile", fmt.Sprintf("%+v", indexFile))
