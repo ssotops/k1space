@@ -686,6 +686,31 @@ func deleteConfig() {
 		return
 	}
 
+	// Delete empty parent directories
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	cloudDir := filepath.Join(baseDir, cloud)
+	regionDir := filepath.Join(cloudDir, region)
+
+	// Check and delete region directory if empty
+	if isEmpty(regionDir) {
+		err = os.Remove(regionDir)
+		if err != nil {
+			log.Error("Error deleting empty region directory", "error", err)
+		} else {
+			log.Info("Deleted empty region directory", "path", regionDir)
+		}
+
+		// Check and delete cloud directory if empty
+		if isEmpty(cloudDir) {
+			err = os.Remove(cloudDir)
+			if err != nil {
+				log.Error("Error deleting empty cloud directory", "error", err)
+			} else {
+				log.Info("Deleted empty cloud directory", "path", cloudDir)
+			}
+		}
+	}
+
 	fmt.Printf("Configuration '%s' has been deleted and backed up to %s\n", selectedConfig, backupDir)
 	log.Info("deleteConfig function completed successfully")
 
