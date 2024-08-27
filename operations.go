@@ -7,9 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-
-	"github.com/charmbracelet/log"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/log"
 )
 
 func provisionCluster() {
@@ -154,16 +153,31 @@ func setupKubefirstRepositories() {
 		"github.com/kubefirst/kubefirst-api",
 	}
 
+	var branch string
+	err := huh.NewInput().
+		Title("Enter the branch name to checkout (default: main)").
+		Value(&branch).
+		Run()
+
+	if err != nil {
+		log.Error("Error getting branch name", "error", err)
+		return
+	}
+
+	if branch == "" {
+		branch = "main"
+	}
+
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 	repoDir := filepath.Join(baseDir, ".repositories")
-	err := os.MkdirAll(repoDir, 0755)
+	err = os.MkdirAll(repoDir, 0755)
 	if err != nil {
 		log.Error("Error creating repositories directory", "error", err)
 		return
 	}
 
 	summary := make([][]string, 0, len(repos)+1)
-	summary = append(summary, []string{"Repository", "Clone Path", "Symlink Path", "Status"})
+	summary = append(summary, []string{"Repository", "Clone Path", "Symlink Path", "Branch", "Status"})
 
 	for _, repo := range repos {
 		repoName := filepath.Base(repo)
@@ -173,18 +187,18 @@ func setupKubefirstRepositories() {
 		if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
 			// Repository already exists, sync instead
 			fmt.Printf("Repository %s already exists. Syncing...\n", repo)
-			status := syncRepository(repoPath)
-			summary = append(summary, []string{repo, repoPath, symlinkPath, status})
+			status := syncRepository(repoPath, branch)
+			summary = append(summary, []string{repo, repoPath, symlinkPath, branch, status})
 			continue
 		}
 
 		fmt.Printf("Cloning %s...\n", repo)
 
-		cmd := exec.Command("git", "clone", "https://"+repo+".git", repoPath)
+		cmd := exec.Command("git", "clone", "-b", branch, "https://"+repo+".git", repoPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Error("Error cloning repository", "repo", repo, "error", err, "output", string(output))
-			summary = append(summary, []string{repo, repoPath, symlinkPath, "Failed to clone"})
+			summary = append(summary, []string{repo, repoPath, symlinkPath, branch, "Failed to clone"})
 			continue
 		}
 
@@ -192,13 +206,13 @@ func setupKubefirstRepositories() {
 		if err != nil {
 			if !os.IsExist(err) {
 				log.Error("Error creating symlink", "repo", repo, "error", err)
-				summary = append(summary, []string{repo, repoPath, symlinkPath, "Cloned, failed to symlink"})
+				summary = append(summary, []string{repo, repoPath, symlinkPath, branch, "Cloned, failed to symlink"})
 				continue
 			}
 			// Symlink already exists, which is fine
 		}
 
-		summary = append(summary, []string{repo, repoPath, symlinkPath, "Success"})
+		summary = append(summary, []string{repo, repoPath, symlinkPath, branch, "Success"})
 		fmt.Printf("Repository %s setup complete\n", repo)
 	}
 
@@ -215,8 +229,23 @@ func syncKubefirstRepositories() {
 		return
 	}
 
+	var branch string
+	err = huh.NewInput().
+		Title("Enter the branch name to sync (default: main)").
+		Value(&branch).
+		Run()
+
+	if err != nil {
+		log.Error("Error getting branch name", "error", err)
+		return
+	}
+
+	if branch == "" {
+		branch = "main"
+	}
+
 	summary := make([][]string, 0, len(repos)+1)
-	summary = append(summary, []string{"Repository", "Path", "Status"})
+	summary = append(summary, []string{"Repository", "Path", "Branch", "Status"})
 
 	for _, repo := range repos {
 		if !repo.IsDir() {
@@ -226,8 +255,8 @@ func syncKubefirstRepositories() {
 		repoPath := filepath.Join(repoDir, repo.Name())
 		fmt.Printf("Syncing %s...\n", repo.Name())
 
-		status := syncRepository(repoPath)
-		summary = append(summary, []string{repo.Name(), repoPath, status})
+		status := syncRepository(repoPath, branch)
+		summary = append(summary, []string{repo.Name(), repoPath, branch, status})
 		fmt.Printf("Repository %s sync complete\n", repo.Name())
 	}
 
@@ -244,20 +273,6 @@ func handleKubefirstSetup() {
 }
 
 // Helper functions
-
-func syncRepository(repoPath string) string {
-	cmd := exec.Command("git", "-C", repoPath, "pull")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("Error syncing repository", "repo", repoPath, "error", err, "output", string(output))
-		return "Failed to sync"
-	}
-
-	if strings.Contains(string(output), "Already up to date.") {
-		return "Up to date"
-	}
-	return "Updated"
-}
 
 func printSummaryTable(summary [][]string) {
 	fmt.Println(style.Render("\nRepository Setup Summary:"))
@@ -286,22 +301,37 @@ func printSummaryTable(summary [][]string) {
 }
 
 func runKubefirstSetup() error {
+	// Prompt for branch name
+	var branch string
+	err := huh.NewInput().
+		Title("Enter the branch name to checkout (default: main)").
+		Value(&branch).
+		Run()
+
+	if err != nil {
+		return fmt.Errorf("error getting branch name: %w", err)
+	}
+
+	if branch == "" {
+		branch = "main"
+	}
+
 	// Setup Console Environment
-	err := setupConsoleEnvironment()
+	err = setupConsoleEnvironment()
 	if err != nil {
 		log.Error("Error setting up Console environment", "error", err)
 		return err
 	}
 
 	// Setup Kubefirst API
-	err = setupKubefirstAPI()
+	err = setupKubefirstAPI(branch)
 	if err != nil {
 		log.Error("Error setting up Kubefirst API", "error", err)
 		return err
 	}
 
 	// Setup Kubefirst
-	err = setupKubefirst()
+	err = setupKubefirst(branch)
 	if err != nil {
 		log.Error("Error setting up Kubefirst", "error", err)
 		return err
@@ -363,18 +393,18 @@ func setupConsoleEnvironment() error {
 	return nil
 }
 
-func setupKubefirstAPI() error {
+func setupKubefirstAPI(branch string) error {
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 	apiDir := filepath.Join(baseDir, "kubefirst-api")
 
-	// Checkout feature branch
-	cmd := exec.Command("git", "-C", apiDir, "checkout", "feat-custom-repo")
+	// Checkout specified branch
+	cmd := exec.Command("git", "-C", apiDir, "checkout", branch)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("error checking out feat-custom-repo: %w\nOutput: %s", err, output)
+		return fmt.Errorf("error checking out %s: %w\nOutput: %s", branch, err, output)
 	}
 
-	fmt.Println("Checked out feat-custom-repo branch for Kubefirst API")
+	fmt.Printf("Checked out %s branch for Kubefirst API\n", branch)
 
 	// TODO: Add instructions to run the API locally
 	fmt.Println("Please follow the instructions in the Kubefirst API README to set up and run the API locally.")
@@ -382,7 +412,7 @@ func setupKubefirstAPI() error {
 	return nil
 }
 
-func setupKubefirst() error {
+func setupKubefirst(branch string) error {
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 	kubefirstDir := filepath.Join(baseDir, "kubefirst")
 
@@ -394,14 +424,14 @@ func setupKubefirst() error {
 
 	fmt.Println("Set K1_LOCAL_DEBUG=true for Kubefirst")
 
-	// Checkout feature branch
-	cmd := exec.Command("git", "-C", kubefirstDir, "checkout", "feat-custom-repo")
+	// Checkout specified branch
+	cmd := exec.Command("git", "-C", kubefirstDir, "checkout", branch)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("error checking out feat-custom-repo: %w\nOutput: %s", err, output)
+		return fmt.Errorf("error checking out %s: %w\nOutput: %s", branch, err, output)
 	}
 
-	fmt.Println("Checked out feat-custom-repo branch for Kubefirst")
+	fmt.Printf("Checked out %s branch for Kubefirst\n", branch)
 
 	// Update go.mod
 	apiDir := filepath.Join(baseDir, "kubefirst-api")
@@ -428,4 +458,35 @@ func setupKubefirst() error {
 	fmt.Println("Please build the Kubefirst binary and execute the create command with the necessary parameters.")
 
 	return nil
+}
+
+func syncRepository(repoPath, branch string) string {
+	// Fetch the latest changes
+	cmd := exec.Command("git", "-C", repoPath, "fetch", "origin")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Error("Error fetching repository", "repo", repoPath, "error", err, "output", string(output))
+		return "Failed to fetch"
+	}
+
+	// Check out the specified branch
+	cmd = exec.Command("git", "-C", repoPath, "checkout", branch)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Error("Error checking out branch", "repo", repoPath, "branch", branch, "error", err, "output", string(output))
+		return "Failed to checkout branch"
+	}
+
+	// Pull the latest changes
+	cmd = exec.Command("git", "-C", repoPath, "pull", "origin", branch)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		log.Error("Error pulling latest changes", "repo", repoPath, "branch", branch, "error", err, "output", string(output))
+		return "Failed to pull latest changes"
+	}
+
+	if strings.Contains(string(output), "Already up to date.") {
+		return "Up to date"
+	}
+	return "Updated"
 }
