@@ -475,3 +475,99 @@ func syncRepository(repoPath, branch string) string {
 	}
 	return "Updated"
 }
+
+func revertKubefirstToMain() {
+	log.Info("Starting revert Kubefirst to main process")
+
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	repos := []string{"kubefirst", "console", "kubefirst-api"}
+	summary := make(map[string]string)
+
+	var stashChanges bool
+	err := huh.NewConfirm().
+		Title("Local changes detected. Do you want to stash changes in the repositories?").
+		Value(&stashChanges).
+		Run()
+
+	if err != nil {
+		log.Error("Error in user prompt", "error", err)
+		return
+	}
+
+	if !stashChanges {
+		fmt.Println("Operation cancelled. No changes were made.")
+		return
+	}
+
+	for _, repo := range repos {
+		repoPath := filepath.Join(baseDir, ".repositories", repo)
+
+		// Check for local changes
+		cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain")
+		output, err := cmd.Output()
+		if err != nil {
+			log.Error("Error checking git status", "repo", repo, "error", err)
+			summary[repo] = "Failed to check status"
+			continue
+		}
+
+		if len(output) > 0 {
+			// Stash changes
+			cmd = exec.Command("git", "-C", repoPath, "stash")
+			output, err = cmd.CombinedOutput()
+			if err != nil {
+				log.Error("Error stashing changes", "repo", repo, "error", err, "output", string(output))
+				summary[repo] = "Failed to stash changes"
+				continue
+			}
+			summary[repo] = "Changes stashed"
+		} else {
+			summary[repo] = "No local changes"
+		}
+
+		// Checkout main branch
+		cmd = exec.Command("git", "-C", repoPath, "checkout", "main")
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			log.Error("Error checking out main branch", "repo", repo, "error", err, "output", string(output))
+			summary[repo] += ", Failed to checkout main"
+			continue
+		}
+
+		// Pull latest changes
+		cmd = exec.Command("git", "-C", repoPath, "pull", "origin", "main")
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			log.Error("Error pulling latest changes", "repo", repo, "error", err, "output", string(output))
+			summary[repo] += ", Failed to pull latest"
+			continue
+		}
+
+		if !strings.Contains(summary[repo], "Failed") {
+			summary[repo] += ", Reverted to main"
+		}
+	}
+
+	// Revert Console environment
+	consoleEnvPath := filepath.Join(baseDir, "console", ".env")
+	if err := os.Remove(consoleEnvPath); err != nil && !os.IsNotExist(err) {
+		log.Error("Error removing Console .env file", "error", err)
+		summary["Console .env"] = "Failed to remove"
+	} else {
+		summary["Console .env"] = "Removed"
+	}
+
+	// Unset K1_LOCAL_DEBUG environment variable
+	os.Unsetenv("K1_LOCAL_DEBUG")
+	summary["K1_LOCAL_DEBUG"] = "Unset"
+
+	// Print summary
+	fmt.Println("\nRevert to Main Summary:")
+	fmt.Println("------------------------")
+	for item, status := range summary {
+		fmt.Printf("%-20s: %s\n", item, status)
+	}
+
+	fmt.Println("\nRevert to main process completed")
+	fmt.Println("Note: If changes were stashed, use 'git stash pop' in the respective repositories to recover them.")
+}

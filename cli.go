@@ -113,6 +113,7 @@ func runKubefirstMenu() {
 						huh.NewOption("Clone Repositories", "Clone Repositories"),
 						huh.NewOption("Sync Repositories", "Sync Repositories"),
 						huh.NewOption("Setup Kubefirst", "Setup Kubefirst"),
+						huh.NewOption("Revert to Main", "Revert to Main"), // Add this line
 						huh.NewOption("Back", "Back"),
 					).
 					Value(&selected),
@@ -132,6 +133,8 @@ func runKubefirstMenu() {
 			syncKubefirstRepositories()
 		case "Setup Kubefirst":
 			runKubefirstSetup()
+		case "Revert to Main": // Add this case
+			revertKubefirstToMain()
 		case "Back":
 			return
 		}
