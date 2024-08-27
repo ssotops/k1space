@@ -41,6 +41,7 @@ func runConfigMenu() {
 				huh.NewSelect[string]().
 					Title("Config Menu").
 					Options(
+						huh.NewOption("List Configs", "List Configs"),
 						huh.NewOption("Create Config", "Create Config"),
 						huh.NewOption("Delete Config", "Delete Config"),
 						huh.NewOption("Back", "Back"),
@@ -56,6 +57,8 @@ func runConfigMenu() {
 		}
 
 		switch selected {
+		case "List Configs":
+			listConfigs()
 		case "Create Config":
 			createConfig(&CloudConfig{})
 		case "Delete Config":
