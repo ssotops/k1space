@@ -321,9 +321,9 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 		if indexFile.Configs[key].Flags == nil {
 			indexFile.Configs[key] = Config{
 				Files: []string{
-					filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh"),
-					filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh"),
-					filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env"),
+					filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh")),
+					filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh")),
+					filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")),
 				},
 				Flags: make(map[string]string),
 			}
@@ -869,4 +869,42 @@ func deleteConfig() {
 		),
 	)
 	finalConfirmForm.Run()
+}
+
+func listConfigs() {
+	log.Info("Starting listConfigs function")
+
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		log.Error("Error loading index file", "error", err)
+		fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+		return
+	}
+
+	if len(indexFile.Configs) == 0 {
+		fmt.Println("No configurations found.")
+		return
+	}
+
+	fmt.Println(style.Render("Existing Configurations:"))
+	for configName, config := range indexFile.Configs {
+		parts := strings.Split(configName, "_")
+		if len(parts) == 3 {
+			cloud, region, prefix := parts[0], parts[1], parts[2]
+			fmt.Printf("\n%s:\n", style.Render(configName))
+			fmt.Printf("  Cloud Provider: %s\n", cloud)
+			fmt.Printf("  Region: %s\n", region)
+			fmt.Printf("  Prefix: %s\n", prefix)
+			fmt.Printf("  Files:\n")
+			for _, file := range config.Files {
+				fmt.Printf("    - %s\n", file)
+			}
+		} else {
+			fmt.Printf("\n%s: (Invalid format)\n", style.Render(configName))
+		}
+	}
+
+	// Wait for user input before returning to the menu
+	fmt.Print("\nPress Enter to continue...")
+	fmt.Scanln()
 }
