@@ -1,14 +1,26 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/briandowns/spinner"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/log"
+	"github.com/fatih/color"
+)
+
+var (
+	consolePrinter      = color.New(color.FgCyan)
+	kubefirstAPIPrinter = color.New(color.FgMagenta)
+	kubefirstPrinter    = color.New(color.FgYellow)
 )
 
 func provisionCluster() {
@@ -293,6 +305,173 @@ func printSummaryTable(summary [][]string) {
 	}
 }
 
+func runKubefirst(repoDir, logsDir string) {
+	kubefirstDir := filepath.Join(repoDir, "kubefirst")
+	logFile := filepath.Join(logsDir, "kubefirst.log")
+
+	buildCmd := exec.Command("go", "build", "-o", "kubefirst")
+	buildCmd.Dir = kubefirstDir
+
+	err := runAndLogCommand(buildCmd, logFile, color.FgYellow)
+	if err != nil {
+		log.Error("Error building kubefirst", "error", err)
+		return
+	}
+
+	log.Info("Kubefirst binary built successfully", "path", filepath.Join(kubefirstDir, "kubefirst"))
+}
+
+func runKubefirstAPI(repoDir, logsDir string) {
+	apiDir := filepath.Join(repoDir, "kubefirst-api")
+	logFile := filepath.Join(logsDir, "kubefirst-api.log")
+
+	// Check if k3d is installed
+	if _, err := exec.LookPath("k3d"); err != nil {
+		log.Error("k3d is not installed or not in PATH. Please install k3d and try again.")
+		return
+	}
+
+	setupScript := `
+#!/bin/bash
+set -e
+go install github.com/air-verse/air@latest
+go install github.com/swaggo/swag/cmd/swag@latest
+k3d cluster create dev || echo "Cluster 'dev' may already exist, continuing..."
+k3d kubeconfig write dev
+export K1_LOCAL_DEBUG=true
+export K1_LOCAL_KUBECONFIG_PATH=$(k3d kubeconfig get dev)
+export CLUSTER_ID="local-dev"
+export CLUSTER_TYPE="k3d"
+export INSTALL_METHOD="local"
+export K1_ACCESS_TOKEN="local-dev-token"
+export IS_CLUSTER_ZERO=true
+if [ ! -f .env ]; then
+    cp .env.example .env
+fi
+source .env
+kubectl create namespace kubefirst --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic kubefirst-clusters --from-literal=clusters='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic kubefirst-catalog --from-literal=catalog='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
+make updateswagger
+make build
+`
+
+	setupCmd := exec.Command("bash", "-c", setupScript)
+	setupCmd.Dir = apiDir
+
+	err := runAndLogCommand(setupCmd, logFile, color.FgGreen)
+	if err != nil {
+		log.Error("Error setting up kubefirst-api", "error", err)
+		return
+	}
+
+	airCmd := exec.Command("air")
+	airCmd.Dir = apiDir
+
+	err = runAndLogCommand(airCmd, logFile, color.FgGreen)
+	if err != nil {
+		log.Error("Error running kubefirst-api", "error", err)
+	}
+}
+
+func runConsole(repoDir, logsDir string) {
+	consoleDir := filepath.Join(repoDir, "console")
+	logFile := filepath.Join(logsDir, "console.log")
+
+	log.Info("Starting console setup", "directory", consoleDir)
+
+	// Check if yarn is installed
+	if _, err := exec.LookPath("yarn"); err != nil {
+		log.Error("yarn is not installed or not in PATH. Please install yarn and try again.")
+		return
+	}
+
+	// Install dependencies
+	log.Info("Installing dependencies...")
+	err := runCommandWithLiveOutput("yarn install", consoleDir, logFile)
+	if err != nil {
+		log.Error("Failed to install dependencies", "error", err)
+		return
+	}
+	log.Info("Dependencies installed successfully")
+
+	// Check if next is installed
+	nextPath := filepath.Join(consoleDir, "node_modules", ".bin", "next")
+	if _, err := os.Stat(nextPath); os.IsNotExist(err) {
+		log.Error("next command not found. Make sure it's listed in package.json dependencies.")
+		return
+	}
+	log.Info("Next.js installation verified")
+
+	// Run the dev command
+	log.Info("Starting Next.js development server...")
+	cmd := exec.Command("yarn", "dev")
+	cmd.Dir = consoleDir
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(consoleDir, "node_modules", ".bin")+":"+os.Getenv("PATH"))
+
+	err = runCommandWithLiveOutput("yarn dev", consoleDir, logFile)
+	if err != nil {
+		log.Error("Error running console", "error", err)
+	}
+}
+
+func runCommandWithLiveOutput(command, dir, logFile string) error {
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+
+	// Create a pipe for the command's stdout
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stdout pipe: %w", err)
+	}
+
+	// Create a pipe for the command's stderr
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stderr pipe: %w", err)
+	}
+
+	// Start the command
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("error starting command: %w", err)
+	}
+
+	// Create a log file
+	f, err := os.Create(logFile)
+	if err != nil {
+		return fmt.Errorf("error creating log file: %w", err)
+	}
+	defer f.Close()
+
+	// Create a multi-writer to write to both console and log file
+	multiWriter := io.MultiWriter(os.Stdout, f)
+
+	// Start a goroutine to read from stdout pipe
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			fmt.Fprintln(multiWriter, color.CyanString("  [stdout] ")+scanner.Text())
+		}
+	}()
+
+	// Start a goroutine to read from stderr pipe
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			fmt.Fprintln(multiWriter, color.RedString("  [stderr] ")+scanner.Text())
+		}
+	}()
+
+	// Wait for the command to finish
+	err = cmd.Wait()
+	if err != nil {
+		return fmt.Errorf("command failed: %w", err)
+	}
+
+	return nil
+}
+
 func runKubefirstSetup() error {
 	// Prompt for branch name
 	var branch string
@@ -407,7 +586,7 @@ func setupKubefirstAPI(branch string) error {
 
 func setupKubefirst(branch string) error {
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
-	kubefirstDir := filepath.Join(baseDir, "kubefirst")
+	kubefirstDir := filepath.Join(baseDir, ".repositories", "kubefirst")
 
 	// Set K1_LOCAL_DEBUG environment variable
 	err := os.Setenv("K1_LOCAL_DEBUG", "true")
@@ -427,7 +606,7 @@ func setupKubefirst(branch string) error {
 	fmt.Printf("Checked out %s branch for Kubefirst\n", branch)
 
 	// Update go.mod
-	apiDir := filepath.Join(baseDir, "kubefirst-api")
+	apiDir := filepath.Join(baseDir, ".repositories", "kubefirst-api")
 	goModPath := filepath.Join(kubefirstDir, "go.mod")
 
 	goModContent, err := os.ReadFile(goModPath)
@@ -435,10 +614,19 @@ func setupKubefirst(branch string) error {
 		return fmt.Errorf("error reading go.mod: %w", err)
 	}
 
-	newContent := strings.Replace(string(goModContent),
-		"github.com/kubefirst/kubefirst-api v0.1.26",
-		fmt.Sprintf("github.com/kubefirst/kubefirst-api v0.1.26 => %s", apiDir),
-		1)
+	// Find the line with kubefirst-api and replace it
+	lines := strings.Split(string(goModContent), "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "github.com/kubefirst/kubefirst-api") {
+			lines[i] = fmt.Sprintf("github.com/kubefirst/kubefirst-api v0.0.0")
+			break
+		}
+	}
+
+	// Add the replace directive
+	lines = append(lines, fmt.Sprintf("replace github.com/kubefirst/kubefirst-api => %s", apiDir))
+
+	newContent := strings.Join(lines, "\n")
 
 	err = os.WriteFile(goModPath, []byte(newContent), 0644)
 	if err != nil {
@@ -447,8 +635,57 @@ func setupKubefirst(branch string) error {
 
 	fmt.Println("Updated go.mod to point to local Kubefirst API repository")
 
-	// TODO: Add instructions to build and run Kubefirst
-	fmt.Println("Please build the Kubefirst binary and execute the create command with the necessary parameters.")
+	// Build the kubefirst binary
+	buildCmd := exec.Command("go", "build", "-o", "kubefirst")
+	buildCmd.Dir = kubefirstDir
+	buildOutput, err := buildCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error building kubefirst: %w\nOutput: %s", err, buildOutput)
+	}
+
+	fmt.Println("Built Kubefirst binary successfully")
+
+	return nil
+}
+
+func runAndLogCommand(cmd *exec.Cmd, logFile string, textColor color.Attribute) error {
+	f, err := os.Create(logFile)
+	if err != nil {
+		return fmt.Errorf("error creating log file: %w", err)
+	}
+	defer f.Close()
+
+	// Create a pipe for capturing the command's output
+	r, w := io.Pipe()
+
+	// Set up a multi-writer for both the log file and the pipe
+	cmd.Stdout = io.MultiWriter(f, w)
+	cmd.Stderr = io.MultiWriter(f, os.Stderr)
+
+	colorPrinter := color.New(textColor)
+
+	// Start the command
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("error starting command: %w", err)
+	}
+
+	// Read from the pipe and print colored output
+	go func() {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			colorPrinter.Println(scanner.Text())
+		}
+		r.Close()
+	}()
+
+	// Wait for the command to finish
+	err = cmd.Wait()
+	if err != nil {
+		return fmt.Errorf("error running command: %w", err)
+	}
+
+	w.Close()
 
 	return nil
 }
@@ -570,4 +807,125 @@ func revertKubefirstToMain() {
 
 	fmt.Println("\nRevert to main process completed")
 	fmt.Println("Note: If changes were stashed, use 'git stash pop' in the respective repositories to recover them.")
+}
+func runKubefirstRepositories() {
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	repoDir := filepath.Join(baseDir, ".repositories")
+	logsDir := filepath.Join(baseDir, ".logs")
+
+	err := os.MkdirAll(logsDir, 0755)
+	if err != nil {
+		log.Error("Error creating logs directory", "error", err)
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		runServiceWithColoredLogs("console", filepath.Join(repoDir, "console"), logsDir, consolePrinter, func(dir string) *exec.Cmd {
+			return exec.Command("yarn", "dev")
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		runServiceWithColoredLogs("kubefirst-api", filepath.Join(repoDir, "kubefirst-api"), logsDir, kubefirstAPIPrinter, func(dir string) *exec.Cmd {
+			return exec.Command("air")
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		runServiceWithColoredLogs("kubefirst", filepath.Join(repoDir, "kubefirst"), logsDir, kubefirstPrinter, func(dir string) *exec.Cmd {
+			return exec.Command("go", "run", "main.go")
+		})
+	}()
+
+	wg.Wait()
+}
+
+func runServiceWithColoredLogs(serviceName, serviceDir, logsDir string, printer *color.Color, cmdCreator func(string) *exec.Cmd) {
+	logFile := filepath.Join(logsDir, serviceName+".log")
+	f, err := os.Create(logFile)
+	if err != nil {
+		log.Error("Error creating log file", "service", serviceName, "error", err)
+		return
+	}
+	defer f.Close()
+
+	cmd := cmdCreator(serviceDir)
+	cmd.Dir = serviceDir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Error("Error creating stdout pipe", "service", serviceName, "error", err)
+		return
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		log.Error("Error creating stderr pipe", "service", serviceName, "error", err)
+		return
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		log.Error("Error starting service", "service", serviceName, "error", err)
+		return
+	}
+
+	go logOutput(serviceName, stdout, f, printer)
+	go logOutput(serviceName, stderr, f, printer)
+
+	err = cmd.Wait()
+	if err != nil {
+		log.Error("Service exited with error", "service", serviceName, "error", err)
+	}
+}
+
+func logOutput(serviceName string, reader io.Reader, logFile *os.File, printer *color.Color) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := scanner.Text()
+		formattedLine := fmt.Sprintf("%s: %s\n", printer.Sprint(serviceName), line)
+		fmt.Print(formattedLine)
+		logFile.WriteString(formattedLine)
+	}
+}
+
+func runCommand(cmd *exec.Cmd, dir, logFile string) error {
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("command failed: %w\nOutput: %s", err, output)
+	}
+	return appendToLog(logFile, string(output))
+}
+
+func appendToLog(logFile, content string) error {
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(content + "\n")
+	return err
+}
+
+func startSpinner(message string) *spinner.Spinner {
+	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
+	s.Suffix = " " + message
+	s.Start()
+	return s
+}
+
+func stopSpinner(s *spinner.Spinner, success bool) {
+	s.Stop()
+	if success {
+		color.Green("✓ " + s.Suffix)
+	} else {
+		color.Red("✗ " + s.Suffix)
+	}
 }
