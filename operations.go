@@ -819,26 +819,28 @@ func runKubefirstRepositories() {
 		return
 	}
 
+	timestamp := time.Now().Format("2006-01-02-150405")
+
 	var wg sync.WaitGroup
 	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
-		runServiceWithColoredLogs("console", filepath.Join(repoDir, "console"), logsDir, consolePrinter, func(dir string) *exec.Cmd {
+		runServiceWithColoredLogs("console", filepath.Join(repoDir, "console"), logsDir, timestamp, consolePrinter, func(dir string) *exec.Cmd {
 			return exec.Command("yarn", "dev")
 		})
 	}()
 
 	go func() {
 		defer wg.Done()
-		runServiceWithColoredLogs("kubefirst-api", filepath.Join(repoDir, "kubefirst-api"), logsDir, kubefirstAPIPrinter, func(dir string) *exec.Cmd {
+		runServiceWithColoredLogs("kubefirst-api", filepath.Join(repoDir, "kubefirst-api"), logsDir, timestamp, kubefirstAPIPrinter, func(dir string) *exec.Cmd {
 			return exec.Command("air")
 		})
 	}()
 
 	go func() {
 		defer wg.Done()
-		runServiceWithColoredLogs("kubefirst", filepath.Join(repoDir, "kubefirst"), logsDir, kubefirstPrinter, func(dir string) *exec.Cmd {
+		runServiceWithColoredLogs("kubefirst", filepath.Join(repoDir, "kubefirst"), logsDir, timestamp, kubefirstPrinter, func(dir string) *exec.Cmd {
 			return exec.Command("go", "run", "main.go")
 		})
 	}()
@@ -846,8 +848,9 @@ func runKubefirstRepositories() {
 	wg.Wait()
 }
 
-func runServiceWithColoredLogs(serviceName, serviceDir, logsDir string, printer *color.Color, cmdCreator func(string) *exec.Cmd) {
-	logFile := filepath.Join(logsDir, serviceName+".log")
+func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp string, printer *color.Color, cmdCreator func(string) *exec.Cmd) {
+	logFileName := fmt.Sprintf("%s-%s.log", serviceName, timestamp)
+	logFile := filepath.Join(logsDir, logFileName)
 	f, err := os.Create(logFile)
 	if err != nil {
 		log.Error("Error creating log file", "service", serviceName, "error", err)
@@ -889,7 +892,8 @@ func logOutput(serviceName string, reader io.Reader, logFile *os.File, printer *
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
-		formattedLine := fmt.Sprintf("%s: %s\n", printer.Sprint(serviceName), line)
+		timestamp := time.Now().Format("2006-01-02 15:04:05")
+		formattedLine := fmt.Sprintf("[%s] %s: %s\n", timestamp, printer.Sprint(serviceName), line)
 		fmt.Print(formattedLine)
 		logFile.WriteString(formattedLine)
 	}
