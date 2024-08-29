@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -322,56 +323,245 @@ func runKubefirst(repoDir, logsDir string) {
 }
 
 func runKubefirstAPI(repoDir, logsDir string) {
-	apiDir := filepath.Join(repoDir, "kubefirst-api")
-	logFile := filepath.Join(logsDir, "kubefirst-api.log")
+	log.Info("Starting runKubefirstAPI function", "repoDir", repoDir, "logsDir", logsDir)
+	currentDir, _ := os.Getwd()
+	log.Info("Current working directory", "dir", currentDir)
 
-	// Check if k3d is installed
-	if _, err := exec.LookPath("k3d"); err != nil {
-		log.Error("k3d is not installed or not in PATH. Please install k3d and try again.")
+	kubeconfigPath, err := setupK3dCluster()
+	if err != nil {
+		log.Error("Failed to set up k3d cluster", "error", err)
 		return
 	}
 
-	setupScript := `
-#!/bin/bash
-set -e
-go install github.com/air-verse/air@latest
-go install github.com/swaggo/swag/cmd/swag@latest
-k3d cluster create dev || echo "Cluster 'dev' may already exist, continuing..."
-k3d kubeconfig write dev
-export K1_LOCAL_DEBUG=true
-export K1_LOCAL_KUBECONFIG_PATH=$(k3d kubeconfig get dev)
-export CLUSTER_ID="local-dev"
-export CLUSTER_TYPE="k3d"
-export INSTALL_METHOD="local"
-export K1_ACCESS_TOKEN="local-dev-token"
-export IS_CLUSTER_ZERO=true
-if [ ! -f .env ]; then
-    cp .env.example .env
-fi
-source .env
-kubectl create namespace kubefirst --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret generic kubefirst-clusters --from-literal=clusters='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
-kubectl create secret generic kubefirst-catalog --from-literal=catalog='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
-make updateswagger
-make build
-`
+	// Set environment variables
+	os.Setenv("KUBECONFIG", kubeconfigPath)
+	os.Setenv("K1_LOCAL_KUBECONFIG_PATH", kubeconfigPath)
+	log.Info("Environment variables set",
+		"KUBECONFIG", os.Getenv("KUBECONFIG"),
+		"K1_LOCAL_KUBECONFIG_PATH", os.Getenv("K1_LOCAL_KUBECONFIG_PATH"))
 
-	setupCmd := exec.Command("bash", "-c", setupScript)
-	setupCmd.Dir = apiDir
+	// Run kubefirst-api directly instead of using air
+	apiCmd := exec.Command("go", "run", ".")
+	apiCmd.Dir = filepath.Join(repoDir, "kubefirst-api")
+	apiCmd.Env = append(os.Environ(),
+		"KUBECONFIG="+kubeconfigPath,
+		"K1_LOCAL_KUBECONFIG_PATH="+kubeconfigPath,
+		"K1_LOCAL_DEBUG=true",
+		"CLUSTER_ID=local-dev",
+		"CLUSTER_TYPE=k3d",
+		"INSTALL_METHOD=local",
+		"K1_ACCESS_TOKEN=local-dev-token",
+		"IS_CLUSTER_ZERO=true")
 
-	err := runAndLogCommand(setupCmd, logFile, color.FgGreen)
+	// Capture and log the output
+	var stdout, stderr bytes.Buffer
+	apiCmd.Stdout = &stdout
+	apiCmd.Stderr = &stderr
+
+	log.Info("Starting kubefirst-api...")
+	err = apiCmd.Start()
 	if err != nil {
-		log.Error("Error setting up kubefirst-api", "error", err)
+		log.Error("Failed to start kubefirst-api", "error", err)
 		return
 	}
 
-	airCmd := exec.Command("air")
-	airCmd.Dir = apiDir
+	// Log the process ID
+	log.Info("Started kubefirst-api", "pid", apiCmd.Process.Pid)
 
-	err = runAndLogCommand(airCmd, logFile, color.FgGreen)
+	// Use a goroutine to continuously log the output
+	go func() {
+		for {
+			log.Info("kubefirst-api stdout", "output", stdout.String())
+			log.Info("kubefirst-api stderr", "output", stderr.String())
+			stdout.Reset()
+			stderr.Reset()
+			time.Sleep(5 * time.Second)
+		}
+	}()
+
+	// Wait for the command to finish
+	err = apiCmd.Wait()
 	if err != nil {
-		log.Error("Error running kubefirst-api", "error", err)
+		log.Error("kubefirst-api exited with error", "error", err)
 	}
+}
+
+func createKubernetesResources() error {
+	log.Info("Creating Kubernetes resources...")
+	resources := []struct {
+		args []string
+		name string
+	}{
+		{[]string{"create", "namespace", "kubefirst", "--dry-run=client", "-o", "yaml"}, "namespace"},
+		{[]string{"create", "secret", "generic", "kubefirst-clusters", "--from-literal=clusters={}", "-n", "kubefirst", "--dry-run=client", "-o", "yaml"}, "clusters secret"},
+		{[]string{"create", "secret", "generic", "kubefirst-catalog", "--from-literal=catalog={}", "-n", "kubefirst", "--dry-run=client", "-o", "yaml"}, "catalog secret"},
+	}
+
+	for _, resource := range resources {
+		log.Info("Creating resource", "resource", resource.name)
+		cmd := exec.Command("kubectl", resource.args...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Error("Failed to generate resource YAML", "resource", resource.name, "error", err, "output", string(output))
+			return fmt.Errorf("failed to generate %s YAML: %w", resource.name, err)
+		}
+
+		applyCmd := exec.Command("kubectl", "apply", "-f", "-")
+		applyCmd.Stdin = bytes.NewReader(output)
+		applyOutput, err := applyCmd.CombinedOutput()
+		if err != nil {
+			log.Error("Failed to apply resource", "resource", resource.name, "error", err, "output", string(applyOutput))
+			return fmt.Errorf("failed to apply %s: %w", resource.name, err)
+		}
+		log.Info("Successfully created resource", "resource", resource.name)
+	}
+
+	log.Info("All Kubernetes resources created successfully")
+	return nil
+}
+
+func installGoPackages() error {
+	cmds := []string{
+		"go install github.com/air-verse/air@latest",
+		"go install github.com/swaggo/swag/cmd/swag@latest",
+	}
+
+	for _, cmd := range cmds {
+		if err := exec.Command("bash", "-c", cmd).Run(); err != nil {
+			return fmt.Errorf("failed to run command '%s': %w", cmd, err)
+		}
+	}
+	return nil
+}
+
+func createK3dCluster() (string, error) {
+	log.Info("Creating k3d cluster...")
+	cmd := exec.Command("k3d", "cluster", "create", "dev", "--wait")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to create k3d cluster: %w\nOutput: %s", err, output)
+	}
+	log.Info("k3d cluster created successfully")
+
+	// Get kubeconfig
+	kubeconfigCmd := exec.Command("k3d", "kubeconfig", "get", "dev")
+	kubeconfigContent, err := kubeconfigCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get k3d kubeconfig: %w", err)
+	}
+
+	// Write kubeconfig to file
+	homeDir, _ := os.UserHomeDir()
+	kubeconfigPath := filepath.Join(homeDir, ".k3d", "kubeconfig-dev.yaml")
+	if err := os.MkdirAll(filepath.Dir(kubeconfigPath), 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory for kubeconfig: %w", err)
+	}
+	if err := os.WriteFile(kubeconfigPath, kubeconfigContent, 0644); err != nil {
+		return "", fmt.Errorf("failed to write kubeconfig file: %w", err)
+	}
+	log.Info("Kubeconfig written successfully", "path", kubeconfigPath)
+
+	return kubeconfigPath, nil
+}
+
+func waitForK3dCluster() error {
+	for i := 0; i < 30; i++ {
+		cmd := exec.Command("k3d", "cluster", "list", "--no-headers")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Error("Failed to list k3d clusters", "error", err)
+		} else {
+			if strings.Contains(string(output), "dev") {
+				log.Info("k3d cluster is ready")
+				return nil
+			}
+		}
+		log.Info("Waiting for k3d cluster to be ready...", "attempt", i+1)
+		time.Sleep(10 * time.Second)
+	}
+	return fmt.Errorf("timeout waiting for k3d cluster to be ready")
+}
+
+func setEnvironmentVariables(apiDir string) error {
+	vars := map[string]string{
+		"K1_LOCAL_DEBUG":           "true",
+		"K1_LOCAL_KUBECONFIG_PATH": "", // We'll set this dynamically
+		"CLUSTER_ID":               "local-dev",
+		"CLUSTER_TYPE":             "k3d",
+		"INSTALL_METHOD":           "local",
+		"K1_ACCESS_TOKEN":          "local-dev-token",
+		"IS_CLUSTER_ZERO":          "true",
+	}
+
+	// Get the kubeconfig path
+	out, err := exec.Command("k3d", "kubeconfig", "get", "dev").Output()
+	if err != nil {
+		return fmt.Errorf("failed to get k3d kubeconfig: %w", err)
+	}
+	vars["K1_LOCAL_KUBECONFIG_PATH"] = strings.TrimSpace(string(out))
+
+	// Set environment variables
+	for k, v := range vars {
+		if err := os.Setenv(k, v); err != nil {
+			return fmt.Errorf("failed to set environment variable %s: %w", k, err)
+		}
+	}
+
+	// Create or update .env file
+	envFile := filepath.Join(apiDir, ".env")
+	if _, err := os.Stat(envFile); os.IsNotExist(err) {
+		exampleEnv := filepath.Join(apiDir, ".env.example")
+		if err := exec.Command("cp", exampleEnv, envFile).Run(); err != nil {
+			return fmt.Errorf("failed to copy .env.example to .env: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func updateSwaggerAndBuild(apiDir string) error {
+	cmds := []string{
+		"make updateswagger",
+		"make build",
+	}
+
+	for _, cmd := range cmds {
+		command := exec.Command("bash", "-c", cmd)
+		command.Dir = apiDir
+		if err := command.Run(); err != nil {
+			return fmt.Errorf("failed to run command '%s': %w", cmd, err)
+		}
+	}
+	return nil
+}
+
+func readEnvFile(filename string) (map[string]string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	envMap := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if equal := strings.Index(line, "="); equal >= 0 {
+			if key := strings.TrimSpace(line[:equal]); len(key) > 0 {
+				value := ""
+				if len(line) > equal {
+					value = strings.TrimSpace(line[equal+1:])
+				}
+				envMap[key] = value
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return envMap, nil
 }
 
 func runConsole(repoDir, logsDir string) {
@@ -819,30 +1009,22 @@ func runKubefirstRepositories() {
 		return
 	}
 
-	timestamp := time.Now().Format("2006-01-02-150405")
-
 	var wg sync.WaitGroup
 	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
-		runServiceWithColoredLogs("console", filepath.Join(repoDir, "console"), logsDir, timestamp, consolePrinter, func(dir string) *exec.Cmd {
-			return exec.Command("yarn", "dev")
-		})
+		runConsole(repoDir, logsDir)
 	}()
 
 	go func() {
 		defer wg.Done()
-		runServiceWithColoredLogs("kubefirst-api", filepath.Join(repoDir, "kubefirst-api"), logsDir, timestamp, kubefirstAPIPrinter, func(dir string) *exec.Cmd {
-			return exec.Command("air")
-		})
+		runKubefirstAPI(repoDir, logsDir)
 	}()
 
 	go func() {
 		defer wg.Done()
-		runServiceWithColoredLogs("kubefirst", filepath.Join(repoDir, "kubefirst"), logsDir, timestamp, kubefirstPrinter, func(dir string) *exec.Cmd {
-			return exec.Command("go", "run", "main.go")
-		})
+		runKubefirst(repoDir, logsDir)
 	}()
 
 	wg.Wait()
@@ -931,5 +1113,70 @@ func stopSpinner(s *spinner.Spinner, success bool) {
 		color.Green("✓ " + s.Suffix)
 	} else {
 		color.Red("✗ " + s.Suffix)
+	}
+}
+func setupK3dCluster() (string, error) {
+	log.Info("Setting up k3d cluster...")
+
+	cmd := exec.Command("k3d", "cluster", "create", "dev", "--wait", "--timeout", "5m")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		log.Error("Failed to create k3d cluster", "stdout", stdout.String(), "stderr", stderr.String())
+		return "", fmt.Errorf("failed to create k3d cluster: %w", err)
+	}
+
+	log.Info("k3d cluster created, waiting for it to be ready...")
+
+	// Wait for the cluster to be ready
+	if err := waitForK3dCluster(); err != nil {
+		return "", fmt.Errorf("k3d cluster failed to become ready: %w", err)
+	}
+
+	// Get kubeconfig
+	kubeconfigCmd := exec.Command("k3d", "kubeconfig", "get", "dev")
+	kubeconfigContent, err := kubeconfigCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get k3d kubeconfig: %w", err)
+	}
+
+	// Write kubeconfig to file
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
+	}
+	kubeconfigPath := filepath.Join(homeDir, ".k3d", "kubeconfig-dev.yaml")
+	if err := os.MkdirAll(filepath.Dir(kubeconfigPath), 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory for kubeconfig: %w", err)
+	}
+	if err := os.WriteFile(kubeconfigPath, kubeconfigContent, 0644); err != nil {
+		return "", fmt.Errorf("failed to write kubeconfig file: %w", err)
+	}
+
+	log.Info("Kubeconfig written", "path", kubeconfigPath)
+
+	return kubeconfigPath, nil
+}
+
+func printRepositorySummary(repoDir string) {
+	repos := []string{"kubefirst", "console", "kubefirst-api"}
+
+	log.Info("Repository Summary:")
+	for _, repo := range repos {
+		repoPath := filepath.Join(repoDir, repo)
+		cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+		branch, err := cmd.Output()
+		if err != nil {
+			log.Error("Failed to get branch for repo", "repo", repo, "error", err)
+			continue
+		}
+
+		log.Info("Repository info",
+			"name", repo,
+			"path", repoPath,
+			"branch", strings.TrimSpace(string(branch)))
 	}
 }
