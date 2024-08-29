@@ -990,7 +990,7 @@ func logOutput(serviceName string, reader io.Reader, logFile *os.File, printer *
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
-		timestamp := time.Now().Format("2006-01-02 15:04:05")
+		timestamp := time.Now().Format("15:04:05")
 		formattedLine := fmt.Sprintf("[%s] %s: %s", timestamp, printer.Sprint(serviceName), line)
 		logFile.WriteString(formattedLine + "\n")
 		logs.add(formattedLine)

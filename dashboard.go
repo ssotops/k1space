@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/charmbracelet/lipgloss"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 var (
@@ -16,6 +19,10 @@ var (
 			Foreground(special).
 			Padding(0, 1).
 			Bold(true)
+
+	pathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
 
 	boxStyle = lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
@@ -39,16 +46,37 @@ var (
 func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs *scrollingLog) string {
 	doc := strings.Builder{}
 
-	// Render summary and Kubefirst logs
+	// Render summary
 	summary := fmt.Sprintf("Kubefirst repositories running\nStatus: All systems operational\nLast updated: %s", time.Now().Format("15:04:05"))
-	kubefirstLogsContent := formatLogs(kubefirstLogs, 178, 5)
-	topSection := summaryStyle.Render(summary + "\n\n" + titleStyle.Render("Kubefirst Logs") + "\n" + kubefirstLogsContent)
-	doc.WriteString(topSection)
+	doc.WriteString(summaryStyle.Render(summary))
+	doc.WriteString("\n\n")
+
+	// Render Kubefirst logs
+	kubefirstLogPath := getLogPath("kubefirst")
+	kubefirstLogsContent := formatLogs(kubefirstLogs, 178, 3)
+	kubefirstLogsSection := kubefirstStyle.Render(
+		titleStyle.Render("Kubefirst Logs") + "\n" +
+			pathStyle.Render(kubefirstLogPath) + "\n" +
+			kubefirstLogsContent,
+	)
+	doc.WriteString(kubefirstLogsSection)
 	doc.WriteString("\n\n")
 
 	// Render Kubefirst-API and Console logs
-	apiLogs := kubefirstAPIStyle.Render(titleStyle.Render("Kubefirst-API Logs") + "\n" + formatLogs(kubefirstAPILogs, 88, 23))
-	consoleLogsRendered := consoleStyle.Render(titleStyle.Render("Console Logs") + "\n" + formatLogs(consoleLogs, 88, 23))
+	apiLogPath := getLogPath("kubefirst-api")
+	consoleLogPath := getLogPath("console")
+
+	apiLogs := kubefirstAPIStyle.Render(
+		titleStyle.Render("Kubefirst-API Logs") + "\n" +
+			pathStyle.Render(apiLogPath) + "\n" +
+			formatLogs(kubefirstAPILogs, 88, 20),
+	)
+
+	consoleLogsRendered := consoleStyle.Render(
+		titleStyle.Render("Console Logs") + "\n" +
+			pathStyle.Render(consoleLogPath) + "\n" +
+			formatLogs(consoleLogs, 88, 20),
+	)
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, apiLogs, consoleLogsRendered)
 	doc.WriteString(row)
@@ -60,7 +88,7 @@ func formatLogs(logs *scrollingLog, width, height int) string {
 	var result strings.Builder
 	lines := logs.getLastN(height)
 	for _, line := range lines {
-		result.WriteString(truncateOrWrap(line, width) + "\n")
+		result.WriteString(truncateOrWrap(removeDateFromLog(line), width) + "\n")
 	}
 	return result.String()
 }
@@ -70,4 +98,46 @@ func truncateOrWrap(s string, width int) string {
 		return s
 	}
 	return s[:width-3] + "..."
+}
+
+func removeDateFromLog(log string) string {
+	parts := strings.SplitN(log, "]", 2)
+	if len(parts) > 1 {
+		return strings.TrimSpace(parts[1])
+	}
+	return log
+}
+
+func getLogPath(serviceName string) string {
+	homeDir, _ := os.UserHomeDir()
+	logDir := filepath.Join(homeDir, ".ssot", "k1space", ".logs")
+
+	files, err := os.ReadDir(logDir)
+	if err != nil {
+		return "Error reading log directory"
+	}
+
+	var latestFile string
+	var latestTime time.Time
+
+	prefix := serviceName + "-"
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), prefix) {
+			filePath := filepath.Join(logDir, file.Name())
+			fileInfo, err := os.Stat(filePath)
+			if err != nil {
+				continue
+			}
+			if fileInfo.ModTime().After(latestTime) {
+				latestFile = filePath
+				latestTime = fileInfo.ModTime()
+			}
+		}
+	}
+
+	if latestFile == "" {
+		return "No log file found for " + serviceName
+	}
+
+	return latestFile
 }
