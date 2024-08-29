@@ -24,7 +24,7 @@ var (
 	kubefirstPrinter    = color.New(color.FgYellow)
 )
 
-const maxLogLines = 20
+const maxLogLines = 100
 
 type scrollingLog struct {
 	lines []string
@@ -38,6 +38,15 @@ func (sl *scrollingLog) add(line string) {
 	if len(sl.lines) > maxLogLines {
 		sl.lines = sl.lines[len(sl.lines)-maxLogLines:]
 	}
+}
+
+func (sl *scrollingLog) getLastN(n int) []string {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	if len(sl.lines) <= n {
+		return sl.lines
+	}
+	return sl.lines[len(sl.lines)-n:]
 }
 
 func (sl *scrollingLog) get() string {
@@ -875,15 +884,8 @@ func runKubefirstRepositories() {
 
 	go updateDisplayWithLogs(kubefirstAPILogs, consoleLogs, kubefirstLogs)
 
-	// Wait for user input to exit
 	fmt.Println("Press 'q' to quit and return to the main menu.")
-	for {
-		var input string
-		fmt.Scanln(&input)
-		if strings.ToLower(input) == "q" {
-			return
-		}
-	}
+	waitForQuit()
 }
 
 func updateDisplayWithLogs(kubefirstAPILogs, consoleLogs, kubefirstLogs *scrollingLog) {
@@ -893,16 +895,24 @@ func updateDisplayWithLogs(kubefirstAPILogs, consoleLogs, kubefirstLogs *scrolli
 	for {
 		select {
 		case <-ticker.C:
-			summary := "Kubefirst repositories running\nStatus: All systems operational"
-			display := renderDashboard(
-				kubefirstAPILogs.get(),
-				consoleLogs.get(),
-				kubefirstLogs.get(),
-				summary,
-			)
+			display := renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs)
 			fmt.Print("\033[2J") // Clear the screen
 			fmt.Print("\033[H")  // Move cursor to top-left corner
 			fmt.Print(display)
+		}
+	}
+}
+
+func waitForQuit() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		char, _, err := reader.ReadRune()
+		if err != nil {
+			fmt.Println("Error reading input:", err)
+			return
+		}
+		if char == 'q' || char == 'Q' {
+			return
 		}
 	}
 }
@@ -949,13 +959,13 @@ func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp strin
 	cmd := cmdCreator(serviceDir)
 	cmd.Dir = serviceDir
 
-	stdoutPipe, err := cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Error("Error creating stdout pipe", "service", serviceName, "error", err)
 		return
 	}
 
-	stderrPipe, err := cmd.StderrPipe()
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		log.Error("Error creating stderr pipe", "service", serviceName, "error", err)
 		return
@@ -967,8 +977,8 @@ func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp strin
 		return
 	}
 
-	go logOutput(serviceName, stdoutPipe, f, printer, logs)
-	go logOutput(serviceName, stderrPipe, f, printer, logs)
+	go logOutput(serviceName, stdout, f, printer, logs)
+	go logOutput(serviceName, stderr, f, printer, logs)
 
 	err = cmd.Wait()
 	if err != nil {

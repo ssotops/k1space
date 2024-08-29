@@ -1,9 +1,10 @@
 package main
 
 import (
-	"strings"
-
+	"fmt"
 	"github.com/charmbracelet/lipgloss"
+	"strings"
+	"time"
 )
 
 var (
@@ -23,43 +24,50 @@ var (
 
 	summaryStyle = boxStyle.Copy().
 			BorderForeground(highlight).
-			Width(120).
+			Width(180).
 			Align(lipgloss.Center)
 
 	columnStyle = boxStyle.Copy().
-			Width(40).
-			Height(20)
+			Width(90).
+			Height(25)
 
 	consoleStyle      = columnStyle.Copy().BorderForeground(lipgloss.Color("#00FFFF"))
 	kubefirstAPIStyle = columnStyle.Copy().BorderForeground(lipgloss.Color("#FF00FF"))
-	kubefirstStyle    = columnStyle.Copy().BorderForeground(lipgloss.Color("#FFFF00"))
+	kubefirstStyle    = boxStyle.Copy().BorderForeground(lipgloss.Color("#FFFF00")).Width(180)
 )
 
-func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs, summary string) string {
+func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs *scrollingLog) string {
 	doc := strings.Builder{}
 
-	doc.WriteString(summaryStyle.Render(summary))
+	// Render summary and Kubefirst logs
+	summary := fmt.Sprintf("Kubefirst repositories running\nStatus: All systems operational\nLast updated: %s", time.Now().Format("15:04:05"))
+	kubefirstLogsContent := formatLogs(kubefirstLogs, 178, 5)
+	topSection := summaryStyle.Render(summary + "\n\n" + titleStyle.Render("Kubefirst Logs") + "\n" + kubefirstLogsContent)
+	doc.WriteString(topSection)
 	doc.WriteString("\n\n")
 
-	apiLogs := kubefirstAPIStyle.Render(titleStyle.Render("Kubefirst-API Logs") + "\n" + truncateOrWrap(kubefirstAPILogs, 38))
-	consoleLogsRendered := consoleStyle.Render(titleStyle.Render("Console Logs") + "\n" + truncateOrWrap(consoleLogs, 38))
-	kubefirstLogsRendered := kubefirstStyle.Render(titleStyle.Render("Kubefirst Logs") + "\n" + truncateOrWrap(kubefirstLogs, 38))
+	// Render Kubefirst-API and Console logs
+	apiLogs := kubefirstAPIStyle.Render(titleStyle.Render("Kubefirst-API Logs") + "\n" + formatLogs(kubefirstAPILogs, 88, 23))
+	consoleLogsRendered := consoleStyle.Render(titleStyle.Render("Console Logs") + "\n" + formatLogs(consoleLogs, 88, 23))
 
-	row := lipgloss.JoinHorizontal(lipgloss.Top, apiLogs, consoleLogsRendered, kubefirstLogsRendered)
+	row := lipgloss.JoinHorizontal(lipgloss.Top, apiLogs, consoleLogsRendered)
 	doc.WriteString(row)
 
 	return doc.String()
 }
 
-func truncateOrWrap(s string, width int) string {
+func formatLogs(logs *scrollingLog, width, height int) string {
 	var result strings.Builder
-	lines := strings.Split(s, "\n")
+	lines := logs.getLastN(height)
 	for _, line := range lines {
-		if len(line) > width {
-			result.WriteString(line[:width-3] + "...\n")
-		} else {
-			result.WriteString(line + "\n")
-		}
+		result.WriteString(truncateOrWrap(line, width) + "\n")
 	}
 	return result.String()
+}
+
+func truncateOrWrap(s string, width int) string {
+	if len(s) <= width {
+		return s
+	}
+	return s[:width-3] + "..."
 }
