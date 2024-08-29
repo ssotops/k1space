@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -15,56 +14,52 @@ var (
 	titleStyle = lipgloss.NewStyle().
 			Foreground(special).
 			Padding(0, 1).
-			MarginBottom(1).
 			Bold(true)
 
-	infoStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.NormalBorder()).
+	boxStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(subtle).
-			Padding(1)
+			Padding(0, 1)
 
-	docStyle = lipgloss.NewStyle().Padding(1, 2, 1, 2)
+	summaryStyle = boxStyle.Copy().
+			BorderForeground(highlight).
+			Width(120).
+			Align(lipgloss.Center)
 
-	// Define styles for each service
-	consoleStyle      = infoStyle.Copy().BorderForeground(lipgloss.Color("#00FFFF"))
-	kubefirstAPIStyle = infoStyle.Copy().BorderForeground(lipgloss.Color("#FF00FF"))
-	kubefirstStyle    = infoStyle.Copy().BorderForeground(lipgloss.Color("#FFFF00"))
+	columnStyle = boxStyle.Copy().
+			Width(40).
+			Height(20)
+
+	consoleStyle      = columnStyle.Copy().BorderForeground(lipgloss.Color("#00FFFF"))
+	kubefirstAPIStyle = columnStyle.Copy().BorderForeground(lipgloss.Color("#FF00FF"))
+	kubefirstStyle    = columnStyle.Copy().BorderForeground(lipgloss.Color("#FFFF00"))
 )
 
-func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs []string, summary []string) string {
-	width := 120
-	height := 30
-
+func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs, summary string) string {
 	doc := strings.Builder{}
 
-	// Summary
-	summaryStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(highlight).
-		Padding(1).
-		Width(width - 4)
-
-	summaryContent := "Summary:\n" + strings.Join(summary, "\n")
-	doc.WriteString(summaryStyle.Render(summaryContent))
+	doc.WriteString(summaryStyle.Render(summary))
 	doc.WriteString("\n\n")
 
-	// Create styles for each component
-	componentStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(subtle).
-		Padding(1).
-		Width((width-8)/3 - 1).
-		Height(height)
+	apiLogs := kubefirstAPIStyle.Render(titleStyle.Render("Kubefirst-API Logs") + "\n" + truncateOrWrap(kubefirstAPILogs, 38))
+	consoleLogsRendered := consoleStyle.Render(titleStyle.Render("Console Logs") + "\n" + truncateOrWrap(consoleLogs, 38))
+	kubefirstLogsRendered := kubefirstStyle.Render(titleStyle.Render("Kubefirst Logs") + "\n" + truncateOrWrap(kubefirstLogs, 38))
 
-	// Render each component
-	kubefirstAPIInfo := componentStyle.Render(fmt.Sprintf("Kubefirst-API Logs:\n%s", strings.Join(kubefirstAPILogs, "\n")))
-	consoleInfo := componentStyle.Render(fmt.Sprintf("Console Logs:\n%s", strings.Join(consoleLogs, "\n")))
-	kubefirstInfo := componentStyle.Render(fmt.Sprintf("Kubefirst Logs:\n%s", strings.Join(kubefirstLogs, "\n")))
-
-	// Combine components horizontally
-	row := lipgloss.JoinHorizontal(lipgloss.Top, kubefirstAPIInfo, consoleInfo, kubefirstInfo)
-
+	row := lipgloss.JoinHorizontal(lipgloss.Top, apiLogs, consoleLogsRendered, kubefirstLogsRendered)
 	doc.WriteString(row)
 
-	return docStyle.Render(doc.String())
+	return doc.String()
+}
+
+func truncateOrWrap(s string, width int) string {
+	var result strings.Builder
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		if len(line) > width {
+			result.WriteString(line[:width-3] + "...\n")
+		} else {
+			result.WriteString(line + "\n")
+		}
+	}
+	return result.String()
 }

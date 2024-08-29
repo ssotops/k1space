@@ -36,13 +36,13 @@ func main() {
 }
 
 func initializeAndCleanup() error {
-    indexFile, err := loadIndexFile()
-    if err != nil {
-        return err
-    }
-    cleanupIndexFile(&indexFile)
-    
-    // Create a new CloudConfig instance and pass its address
-    config := NewCloudConfig()
-    return updateIndexFile(config, indexFile)
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		return err
+	}
+	cleanupIndexFile(&indexFile)
+
+	// Create a new CloudConfig instance and pass its address
+	config := NewCloudConfig()
+	return updateIndexFile(config, indexFile)
 }
