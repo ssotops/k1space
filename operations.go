@@ -13,6 +13,7 @@ import (
 
 	"github.com/briandowns/spinner"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/fatih/color"
 )
@@ -808,6 +809,7 @@ func revertKubefirstToMain() {
 	fmt.Println("\nRevert to main process completed")
 	fmt.Println("Note: If changes were stashed, use 'git stash pop' in the respective repositories to recover them.")
 }
+
 func runKubefirstRepositories() {
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 	repoDir := filepath.Join(baseDir, ".repositories")
@@ -824,31 +826,100 @@ func runKubefirstRepositories() {
 	var wg sync.WaitGroup
 	wg.Add(3)
 
-	go func() {
-		defer wg.Done()
-		runServiceWithColoredLogs("console", filepath.Join(repoDir, "console"), logsDir, timestamp, consolePrinter, func(dir string) *exec.Cmd {
-			return exec.Command("yarn", "dev")
-		})
-	}()
+	kubefirstAPILogs := make(chan string, 100)
+	consoleLogs := make(chan string, 100)
+	kubefirstLogs := make(chan string, 100)
 
 	go func() {
 		defer wg.Done()
 		runServiceWithColoredLogs("kubefirst-api", filepath.Join(repoDir, "kubefirst-api"), logsDir, timestamp, kubefirstAPIPrinter, func(dir string) *exec.Cmd {
 			return exec.Command("air")
-		})
+		}, kubefirstAPILogs)
+	}()
+
+	go func() {
+		defer wg.Done()
+		runServiceWithColoredLogs("console", filepath.Join(repoDir, "console"), logsDir, timestamp, consolePrinter, func(dir string) *exec.Cmd {
+			return exec.Command("yarn", "dev")
+		}, consoleLogs)
 	}()
 
 	go func() {
 		defer wg.Done()
 		runServiceWithColoredLogs("kubefirst", filepath.Join(repoDir, "kubefirst"), logsDir, timestamp, kubefirstPrinter, func(dir string) *exec.Cmd {
 			return exec.Command("go", "run", "main.go")
-		})
+		}, kubefirstLogs)
 	}()
+
+	go updateDisplayWithLogs(kubefirstAPILogs, consoleLogs, kubefirstLogs)
 
 	wg.Wait()
 }
 
-func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp string, printer *color.Color, cmdCreator func(string) *exec.Cmd) {
+func updateDisplayWithLogs(kubefirstAPILogs, consoleLogs, kubefirstLogs <-chan string) {
+	var apiLogs, conLogs, kfLogs []string
+	var summary []string
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case log := <-kubefirstAPILogs:
+			apiLogs = appendLog(apiLogs, log, 10)
+			if strings.Contains(log, "error") || strings.Contains(log, "success") {
+				summary = appendLog(summary, "Kubefirst-API: "+log, 5)
+			}
+		case log := <-consoleLogs:
+			conLogs = appendLog(conLogs, log, 10)
+			if strings.Contains(log, "error") || strings.Contains(log, "success") {
+				summary = appendLog(summary, "Console: "+log, 5)
+			}
+		case log := <-kubefirstLogs:
+			kfLogs = appendLog(kfLogs, log, 10)
+			if strings.Contains(log, "error") || strings.Contains(log, "success") {
+				summary = appendLog(summary, "Kubefirst: "+log, 5)
+			}
+		case <-ticker.C:
+			display := renderDashboard(apiLogs, conLogs, kfLogs, summary)
+			fmt.Print("\033[2J") // Clear the screen
+			fmt.Print("\033[H")  // Move cursor to top-left corner
+			fmt.Println(display)
+		}
+	}
+}
+
+func appendLog(logs []string, newLog string, maxLogs int) []string {
+	logs = append(logs, newLog)
+	if len(logs) > maxLogs {
+		logs = logs[len(logs)-maxLogs:]
+	}
+	return logs
+}
+
+func updateDisplay(consoleChan, kubefirstAPIChan, kubefirstChan <-chan string) {
+	for {
+		consoleOutput := <-consoleChan
+		kubefirstAPIOutput := <-kubefirstAPIChan
+		kubefirstOutput := <-kubefirstChan
+
+		display := lipgloss.JoinVertical(lipgloss.Left,
+			titleStyle.Render("Kubefirst Repositories"),
+			lipgloss.JoinHorizontal(lipgloss.Top,
+				consoleStyle.Render(consoleOutput),
+				kubefirstAPIStyle.Render(kubefirstAPIOutput),
+				kubefirstStyle.Render(kubefirstOutput),
+			),
+		)
+
+		fmt.Print("\033[2J") // Clear the screen
+		fmt.Print("\033[H")  // Move cursor to top-left corner
+		fmt.Println(display)
+	}
+}
+
+func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp string, printer *color.Color, cmdCreator func(string) *exec.Cmd, logChan chan<- string) {
+	// func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp string, printer *color.Color, cmdCreator func(string) *exec.Cmd, outputChan chan<- string) {
 	logFileName := fmt.Sprintf("%s-%s.log", serviceName, timestamp)
 	logFile := filepath.Join(logsDir, logFileName)
 	f, err := os.Create(logFile)
@@ -879,8 +950,8 @@ func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp strin
 		return
 	}
 
-	go logOutput(serviceName, stdout, f, printer)
-	go logOutput(serviceName, stderr, f, printer)
+	go logOutput(serviceName, stdout, f, printer, logChan)
+	go logOutput(serviceName, stderr, f, printer, logChan)
 
 	err = cmd.Wait()
 	if err != nil {
@@ -888,14 +959,15 @@ func runServiceWithColoredLogs(serviceName, serviceDir, logsDir, timestamp strin
 	}
 }
 
-func logOutput(serviceName string, reader io.Reader, logFile *os.File, printer *color.Color) {
+func logOutput(serviceName string, reader io.Reader, logFile *os.File, printer *color.Color, logChan chan<- string) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
 		timestamp := time.Now().Format("2006-01-02 15:04:05")
-		formattedLine := fmt.Sprintf("[%s] %s: %s\n", timestamp, printer.Sprint(serviceName), line)
-		fmt.Print(formattedLine)
-		logFile.WriteString(formattedLine)
+		formattedLine := fmt.Sprintf("[%s] %s: %s", timestamp, printer.Sprint(serviceName), line)
+		fmt.Println(formattedLine)
+		logFile.WriteString(formattedLine + "\n")
+		logChan <- formattedLine
 	}
 }
 
