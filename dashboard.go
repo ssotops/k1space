@@ -24,23 +24,29 @@ var (
 			Foreground(lipgloss.Color("240")).
 			Italic(true)
 
-	boxStyle = lipgloss.NewStyle().
+	summaryStyle = lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(subtle).
-			Padding(0, 1)
+			Padding(1).
+			Width(180)
 
-	summaryStyle = boxStyle.Copy().
-			BorderForeground(highlight).
-			Width(180).
-			Align(lipgloss.Center)
+	kubefirstStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#FFFF00")).
+			Padding(1).
+			Width(180)
 
-	columnStyle = boxStyle.Copy().
-			Width(90).
-			Height(25)
+	consoleStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#00FFFF")).
+			Padding(1).
+			Width(180)
 
-	consoleStyle      = columnStyle.Copy().BorderForeground(lipgloss.Color("#00FFFF"))
-	kubefirstAPIStyle = columnStyle.Copy().BorderForeground(lipgloss.Color("#FF00FF"))
-	kubefirstStyle    = boxStyle.Copy().BorderForeground(lipgloss.Color("#FFFF00")).Width(180)
+	kubefirstAPIStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#FF00FF")).
+				Padding(1).
+				Width(180)
 )
 
 func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs *scrollingLog) string {
@@ -62,24 +68,26 @@ func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs *scrollingLog)
 	doc.WriteString(kubefirstLogsSection)
 	doc.WriteString("\n\n")
 
-	// Render Kubefirst-API and Console logs
-	apiLogPath := getLogPath("kubefirst-api")
+	// Render Console logs
 	consoleLogPath := getLogPath("console")
-
-	apiLogs := kubefirstAPIStyle.Render(
-		titleStyle.Render("Kubefirst-API Logs") + "\n" +
-			pathStyle.Render(apiLogPath) + "\n" +
-			formatLogs(kubefirstAPILogs, 88, 20),
-	)
-
-	consoleLogsRendered := consoleStyle.Render(
+	consoleLogsContent := formatLogs(consoleLogs, 178, 10)
+	consoleLogsSection := consoleStyle.Render(
 		titleStyle.Render("Console Logs") + "\n" +
 			pathStyle.Render(consoleLogPath) + "\n" +
-			formatLogs(consoleLogs, 88, 20),
+			consoleLogsContent,
 	)
+	doc.WriteString(consoleLogsSection)
+	doc.WriteString("\n\n")
 
-	row := lipgloss.JoinHorizontal(lipgloss.Top, apiLogs, consoleLogsRendered)
-	doc.WriteString(row)
+	// Render Kubefirst-API logs
+	apiLogPath := getLogPath("kubefirst-api")
+	apiLogsContent := formatLogs(kubefirstAPILogs, 178, 20)
+	apiLogsSection := kubefirstAPIStyle.Render(
+		titleStyle.Render("Kubefirst-API Logs") + "\n" +
+			pathStyle.Render(apiLogPath) + "\n" +
+			apiLogsContent,
+	)
+	doc.WriteString(apiLogsSection)
 
 	return doc.String()
 }
