@@ -50,7 +50,7 @@ func printIntro() {
 
 	// Create the title and version strings
 	title := titleStyle.Render("k1space")
-	version := versionStyle.Render("v" + getVersion())
+	version := versionStyle.Render(getVersion())
 
 	// Combine and print
 	fmt.Println(lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", version))
