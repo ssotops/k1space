@@ -46,3 +46,4 @@ func initializeAndCleanup() error {
 	config := NewCloudConfig()
 	return updateIndexFile(config, indexFile)
 }
+

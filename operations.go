@@ -25,6 +25,91 @@ var (
 )
 
 const maxLogLines = 100
+const kubefirstAPISetupScript = `#!/bin/bash
+set -e
+
+TIMESTAMP=$(date +"%Y-%m-%d-%H%M%S")
+LOG_FILE="${HOME}/.ssot/k1space/.logs/kubefirst-api-setup-${TIMESTAMP}.log"
+API_DIR="${HOME}/.ssot/k1space/.repositories/kubefirst-api"
+
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+echo "Starting setup script"
+echo "Current working directory: $(pwd)"
+echo "Log file: ${LOG_FILE}"
+echo "API directory: ${API_DIR}"
+
+cd "${API_DIR}"
+
+# Check for required tools
+for cmd in go k3d kubectl make air swag; do
+    if ! command -v $cmd &> /dev/null; then
+        echo "ERROR: $cmd could not be found. Please install it and try again."
+        exit 1
+    fi
+done
+
+echo "Installing required tools..."
+go install github.com/air-verse/air@latest
+go install github.com/swaggo/swag/cmd/swag@latest
+
+# Check k3d cluster and wait for it to be ready
+max_retries=5
+retries=0
+while ! k3d cluster list | grep -q "dev"; do
+    if [ $retries -ge $max_retries ]; then
+        echo "ERROR: k3d cluster 'dev' not found after $max_retries attempts. Please check k3d setup."
+        exit 1
+    fi
+    echo "Waiting for k3d cluster 'dev' to be ready..."
+    sleep 10
+    retries=$((retries+1))
+done
+
+echo "k3d cluster 'dev' is ready."
+
+# Set environment variables
+export K1_LOCAL_DEBUG=true
+export K1_LOCAL_KUBECONFIG_PATH=$(k3d kubeconfig get dev)
+export CLUSTER_ID="local-dev"
+export CLUSTER_TYPE="k3d"
+export INSTALL_METHOD="local"
+export K1_ACCESS_TOKEN="local-dev-token"
+export IS_CLUSTER_ZERO=true
+
+# Create and source .env file
+ENV_FILE="${API_DIR}/.env"
+echo "Checking for .env file at: ${ENV_FILE}"
+if [ ! -f "${ENV_FILE}" ]; then
+    echo "Creating .env file from .env.example"
+    cp "${API_DIR}/.env.example" "${ENV_FILE}"
+    echo "Created .env file from .env.example"
+    echo "Please edit ${ENV_FILE} with your specific values, then press Enter to continue."
+    read
+else
+    echo ".env file already exists"
+fi
+set -a
+source "${ENV_FILE}"
+set +a
+
+echo "Environment variables set:"
+env | grep -E 'K1_|CLUSTER_|KUBECONFIG' | sed 's/^/  /'
+
+echo "Creating necessary Kubernetes resources..."
+kubectl create namespace kubefirst --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic kubefirst-clusters --from-literal=clusters='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic kubefirst-catalog --from-literal=catalog='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
+
+echo "Updating Swagger documentation..."
+make updateswagger
+
+echo "Building the kubefirst-api binary..."
+make build
+
+echo "Starting kubefirst-api with air for live reloading..."
+air
+`
 
 type scrollingLog struct {
 	lines []string
@@ -354,55 +439,177 @@ func runKubefirst(repoDir, logsDir string) {
 }
 
 func runKubefirstAPI(repoDir, logsDir string) {
-	apiDir := filepath.Join(repoDir, "kubefirst-api")
-	logFile := filepath.Join(logsDir, "kubefirst-api.log")
-
-	// Check if k3d is installed
-	if _, err := exec.LookPath("k3d"); err != nil {
-		log.Error("k3d is not installed or not in PATH. Please install k3d and try again.")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Error("Failed to get user home directory", "error", err)
 		return
 	}
 
-	setupScript := `
-#!/bin/bash
+	apiDir := filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst-api")
+	logFile := filepath.Join(logsDir, "kubefirst-api.log")
+	scriptFile := filepath.Join(apiDir, "setup_and_run.sh")
+
+	log.Info("Preparing kubefirst-api setup",
+		"apiDir", apiDir,
+		"logFile", logFile,
+		"scriptFile", scriptFile)
+
+	// Check if apiDir exists
+	if _, err := os.Stat(apiDir); os.IsNotExist(err) {
+		log.Error("API directory does not exist", "path", apiDir)
+		return
+	}
+
+	setupScript := `#!/bin/bash
 set -e
+
+exec > >(tee -a "` + logFile + `") 2>&1
+
+echo "Starting setup script"
+echo "Current working directory: $(pwd)"
+echo "Log file: ` + logFile + `"
+echo "API directory: ` + apiDir + `"
+
+
+function log_error {
+    echo "ERROR: $1" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - ERROR: $1" >> "$LOG_FILE"
+}
+
+function log_info {
+    echo "INFO: $1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - INFO: $1" >> "$LOG_FILE"
+}
+
+LOG_FILE="` + logFile + `"
+API_DIR="` + apiDir + `"
+cd "$API_DIR"
+
+log_info "Current working directory: $(pwd)"
+log_info "Log file: $LOG_FILE"
+log_info "API directory: $API_DIR"
+
+# Check for required tools
+for cmd in go k3d kubectl make air swag; do
+    if ! command -v $cmd &> /dev/null; then
+        log_error "$cmd could not be found. Please install it and try again."
+        exit 1
+    fi
+done
+
+log_info "Installing required tools..."
 go install github.com/air-verse/air@latest
 go install github.com/swaggo/swag/cmd/swag@latest
-k3d cluster create dev || echo "Cluster 'dev' may already exist, continuing..."
-k3d kubeconfig write dev
+
+# Check k3d cluster
+if ! k3d cluster list | grep -q "dev"; then
+    log_info "Creating k3d cluster 'dev'..."
+    k3d cluster create dev
+else
+    log_info "k3d cluster 'dev' already exists."
+fi
+
+log_info "Ensuring kubeconfig is accessible..."
+KUBECONFIG_PATH=$(k3d kubeconfig write dev)
+export KUBECONFIG="$KUBECONFIG_PATH"
+log_info "Kubeconfig path: $KUBECONFIG_PATH"
+
+# Wait for the cluster to be ready
+log_info "Waiting for cluster to be ready..."
+kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+# Set environment variables
 export K1_LOCAL_DEBUG=true
-export K1_LOCAL_KUBECONFIG_PATH=$(k3d kubeconfig get dev)
+export K1_LOCAL_KUBECONFIG_PATH="$KUBECONFIG_PATH"
 export CLUSTER_ID="local-dev"
 export CLUSTER_TYPE="k3d"
 export INSTALL_METHOD="local"
 export K1_ACCESS_TOKEN="local-dev-token"
 export IS_CLUSTER_ZERO=true
-if [ ! -f .env ]; then
-    cp .env.example .env
+
+# Create and source .env file
+ENV_FILE="$API_DIR/.env"
+log_info "Checking for .env file at: $ENV_FILE"
+if [ ! -f "$ENV_FILE" ]; then
+    log_info "Creating .env file from .env.example"
+    cp "$API_DIR/.env.example" "$ENV_FILE"
+    log_info "Created .env file from .env.example"
+    log_info "Please edit $ENV_FILE with your specific values, then press Enter to continue."
+    read
+else
+    log_info ".env file already exists"
 fi
-source .env
+set -a
+source "$ENV_FILE"
+set +a
+
+log_info "Environment variables set:"
+env | grep -E 'K1_|CLUSTER_|KUBECONFIG' | sed 's/^/  /'
+
+log_info "Creating necessary Kubernetes resources..."
 kubectl create namespace kubefirst --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic kubefirst-clusters --from-literal=clusters='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic kubefirst-catalog --from-literal=catalog='{}' -n kubefirst --dry-run=client -o yaml | kubectl apply -f -
+
+log_info "Updating Swagger documentation..."
 make updateswagger
+
+log_info "Building the kubefirst-api binary..."
 make build
+
+log_info "Starting kubefirst-api with air for live reloading..."
+air
 `
 
-	setupCmd := exec.Command("bash", "-c", setupScript)
-	setupCmd.Dir = apiDir
-
-	err := runAndLogCommand(setupCmd, logFile, color.FgGreen)
+	// Create the script file
+	err = os.WriteFile(scriptFile, []byte(setupScript), 0755)
 	if err != nil {
-		log.Error("Error setting up kubefirst-api", "error", err)
+		log.Error("Failed to create setup script", "error", err, "path", scriptFile)
 		return
 	}
+	log.Info("Created setup script", "path", scriptFile)
 
-	airCmd := exec.Command("air")
-	airCmd.Dir = apiDir
+	// Check if the script file was actually created
+	if _, err := os.Stat(scriptFile); os.IsNotExist(err) {
+		log.Error("Failed to create setup script", "error", err, "path", scriptFile)
+		return
+	}
+	log.Info("Verified setup script creation", "path", scriptFile)
 
-	err = runAndLogCommand(airCmd, logFile, color.FgGreen)
+	// Execute the script
+	log.Info("Running kubefirst-api setup script")
+	cmd := exec.Command("bash", scriptFile)
+	cmd.Dir = apiDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err = cmd.Run()
 	if err != nil {
-		log.Error("Error running kubefirst-api", "error", err)
+		log.Error("Error running kubefirst-api setup script", "error", err)
+		// Try to read and log the script content
+		scriptContent, readErr := os.ReadFile(scriptFile)
+		if readErr != nil {
+			log.Error("Failed to read script file", "error", readErr)
+		} else {
+			log.Info("Script content", "content", string(scriptContent))
+		}
+	} else {
+		log.Info("Successfully ran kubefirst-api setup script")
+	}
+
+	// Check if the script file exists after execution
+	if _, err := os.Stat(scriptFile); os.IsNotExist(err) {
+		log.Error("Script file does not exist after execution", "path", scriptFile)
+	} else {
+		log.Info("Script file exists after execution", "path", scriptFile)
+	}
+
+	// Print the contents of the log file
+	logContent, err := os.ReadFile(logFile)
+	if err != nil {
+		log.Error("Failed to read log file", "error", err)
+	} else {
+		log.Info("Log file contents", "content", string(logContent))
 	}
 }
 
@@ -598,8 +805,31 @@ func setupConsoleEnvironment() error {
 }
 
 func setupKubefirstAPI(branch string) error {
-	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
-	apiDir := filepath.Join(baseDir, "kubefirst-api")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("error getting user home directory: %w", err)
+	}
+
+	apiDir := filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst-api")
+	scriptFile := filepath.Join(apiDir, "setup_and_run.sh")
+
+	// Create the script file
+	err = os.WriteFile(scriptFile, []byte(kubefirstAPISetupScript), 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create setup script: %w", err)
+	}
+	log.Info("Created setup script", "path", scriptFile)
+
+	// Spawn a background task to create the k3d cluster
+	go func() {
+		cmd := exec.Command("k3d", "cluster", "create", "dev")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Error("Failed to create k3d cluster", "error", err, "output", string(output))
+		} else {
+			log.Info("Successfully created k3d cluster")
+		}
+	}()
 
 	// Checkout specified branch
 	cmd := exec.Command("git", "-C", apiDir, "checkout", branch)
@@ -609,9 +839,8 @@ func setupKubefirstAPI(branch string) error {
 	}
 
 	fmt.Printf("Checked out %s branch for Kubefirst API\n", branch)
-
-	// TODO: Add instructions to run the API locally
-	fmt.Println("Please follow the instructions in the Kubefirst API README to set up and run the API locally.")
+	fmt.Println("Setup script created and k3d cluster creation started in the background.")
+	fmt.Println("You can now use the 'Run Kubefirst Repositories' command to start the API.")
 
 	return nil
 }
@@ -842,13 +1071,26 @@ func revertKubefirstToMain() {
 }
 
 func runKubefirstRepositories() {
-	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Error("Failed to get user home directory", "error", err)
+		return
+	}
+
+	baseDir := filepath.Join(homeDir, ".ssot", "k1space")
 	repoDir := filepath.Join(baseDir, ".repositories")
 	logsDir := filepath.Join(baseDir, ".logs")
+	scriptFile := filepath.Join(repoDir, "kubefirst-api", "setup_and_run.sh")
 
-	err := os.MkdirAll(logsDir, 0755)
+	err = os.MkdirAll(logsDir, 0755)
 	if err != nil {
 		log.Error("Error creating logs directory", "error", err)
+		return
+	}
+
+	// Check if the script file exists
+	if _, err := os.Stat(scriptFile); os.IsNotExist(err) {
+		log.Error("Setup script does not exist. Please run 'Setup Kubefirst' first.", "path", scriptFile)
 		return
 	}
 
@@ -864,7 +1106,7 @@ func runKubefirstRepositories() {
 	go func() {
 		defer wg.Done()
 		runServiceWithColoredLogs("kubefirst-api", filepath.Join(repoDir, "kubefirst-api"), logsDir, timestamp, color.New(color.FgMagenta), func(dir string) *exec.Cmd {
-			return exec.Command("air")
+			return exec.Command("bash", scriptFile)
 		}, kubefirstAPILogs)
 	}()
 
