@@ -24,28 +24,26 @@ var (
 			Foreground(lipgloss.Color("240")).
 			Italic(true)
 
-	summaryStyle = lipgloss.NewStyle().
+	boxStyle = lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(subtle).
-			Padding(1).
-			Width(180)
+			Padding(0, 1)
 
-	kubefirstStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+	summaryStyle = boxStyle.Copy().
+			BorderForeground(highlight).
+			Width(180).
+			Align(lipgloss.Center)
+
+	kubefirstStyle = boxStyle.Copy().
 			BorderForeground(lipgloss.Color("#FFFF00")).
-			Padding(1).
 			Width(180)
 
-	consoleStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+	consoleStyle = boxStyle.Copy().
 			BorderForeground(lipgloss.Color("#00FFFF")).
-			Padding(1).
 			Width(180)
 
-	kubefirstAPIStyle = lipgloss.NewStyle().
-				BorderStyle(lipgloss.RoundedBorder()).
+	kubefirstAPIStyle = boxStyle.Copy().
 				BorderForeground(lipgloss.Color("#FF00FF")).
-				Padding(1).
 				Width(180)
 )
 
