@@ -28,7 +28,8 @@ const maxLogLines = 100
 const kubefirstAPISetupScript = `#!/bin/bash
 set -e
 
-LOG_FILE="${HOME}/.ssot/k1space/.logs/kubefirst-api-setup.log"
+TIMESTAMP=$(date +"%Y-%m-%d-%H%M%S")
+LOG_FILE="${HOME}/.ssot/k1space/.logs/kubefirst-api-setup-${TIMESTAMP}.log"
 API_DIR="${HOME}/.ssot/k1space/.repositories/kubefirst-api"
 
 exec > >(tee -a "${LOG_FILE}") 2>&1
@@ -51,6 +52,21 @@ done
 echo "Installing required tools..."
 go install github.com/air-verse/air@latest
 go install github.com/swaggo/swag/cmd/swag@latest
+
+# Check k3d cluster and wait for it to be ready
+max_retries=5
+retries=0
+while ! k3d cluster list | grep -q "dev"; do
+    if [ $retries -ge $max_retries ]; then
+        echo "ERROR: k3d cluster 'dev' not found after $max_retries attempts. Please check k3d setup."
+        exit 1
+    fi
+    echo "Waiting for k3d cluster 'dev' to be ready..."
+    sleep 10
+    retries=$((retries+1))
+done
+
+echo "k3d cluster 'dev' is ready."
 
 # Set environment variables
 export K1_LOCAL_DEBUG=true
