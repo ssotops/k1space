@@ -1,10 +1,14 @@
 package main
 
 import (
+  "bufio"
+  "io"
 	"fmt"
 	"os"
+  "os/exec"
 	"path/filepath"
 	"strings"
+  "time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/log"
@@ -54,107 +58,159 @@ func provisionCluster() {
 	}
 	log.Info("User selected config", "selectedConfig", selectedConfig)
 
-	// Display files in selected config
+	// Get files for the selected config
 	files := indexFile.Configs[selectedConfig].Files
-	var selectedFile string
-	fileOptions := make([]huh.Option[string], 0, len(files))
+
+	// Prepare the content for the TUI
+	var configContent strings.Builder
+	var fileContents []string
+	var filePaths []string
+
+	configContent.WriteString(fmt.Sprintf("Configuration: %s\n", selectedConfig))
+	configContent.WriteString(fmt.Sprintf("File count: %d\n", len(files)))
+
 	for _, file := range files {
-		// Remove any surrounding quotes and use only the base filename
 		cleanFile := strings.Trim(file, "\"")
-		baseFile := filepath.Base(cleanFile)
-		fileOptions = append(fileOptions, huh.NewOption(baseFile, cleanFile))
+		content, err := os.ReadFile(filepath.Clean(cleanFile))
+		if err != nil {
+			log.Error("Error reading file", "file", cleanFile, "error", err)
+			continue
+		}
+		fileContents = append(fileContents, string(content))
+		filePaths = append(filePaths, cleanFile)
 	}
 
-	log.Info("Presenting file selection to user", "optionCount", len(fileOptions))
-	form = huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Select a file").
-				Options(fileOptions...).
-				Value(&selectedFile),
-		),
-	)
+	// Render the TUI using the function from dashboard.go
+	tuiContent := renderClusterProvisioningTUI(selectedConfig, configContent.String(), fileContents, filePaths)
+	fmt.Println(tuiContent)
 
-	err = form.Run()
-	if err != nil {
-		log.Error("Error selecting file", "error", err)
-		return
-	}
-	log.Info("User selected file", "selectedFile", selectedFile)
-
-	// Read and display file contents
-	content, err := os.ReadFile(filepath.Clean(selectedFile))
-	if err != nil {
-		log.Error("Error reading file", "error", err)
-		return
-	}
-
-	fmt.Printf("Contents of %s:\n\n%s\n\n", filepath.Base(selectedFile), string(content))
-
-	// Prompt user to run 00-init.sh
-	var confirmRun bool
-	form = huh.NewForm(
+	// Confirmation to provision
+	var confirmProvision bool
+	confirmForm := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title("Do you want to run 00-init.sh to provision the cluster?").
-				Value(&confirmRun),
+				Title("Do you want to proceed with provisioning the cluster?").
+				Value(&confirmProvision),
 		),
 	)
 
-	err = form.Run()
+	err = confirmForm.Run()
 	if err != nil {
 		log.Error("Error in confirmation prompt", "error", err)
 		return
 	}
 
-	if confirmRun {
-		// Summarize the provision cluster process
-		fmt.Println("\nProvisioning Cluster Summary:")
-		fmt.Printf("- Configuration: %s\n", selectedConfig)
-		fmt.Printf("- Init Script: %s\n", filepath.Join(filepath.Dir(selectedFile), "00-init.sh"))
-		fmt.Printf("- Kubefirst Script: %s\n", filepath.Join(filepath.Dir(selectedFile), "01-kubefirst-cloud.sh"))
-		fmt.Printf("- Environment File: %s\n", filepath.Join(filepath.Dir(selectedFile), ".local.cloud.env"))
+	if confirmProvision {
+		log.Info("User confirmed cluster provisioning")
+		fmt.Println("Provisioning cluster...")
 
-		// Final confirmation
-		var finalConfirm bool
-		form = huh.NewForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title("Do you want to proceed with provisioning the cluster?").
-					Value(&finalConfirm),
-			),
-		)
+		// Find the 00-init.sh file
+		var initScriptPath string
+		for _, file := range filePaths {
+			if strings.HasSuffix(file, "00-init.sh") {
+				initScriptPath = file
+				break
+			}
+		}
 
-		err = form.Run()
-		if err != nil {
-			log.Error("Error in final confirmation prompt", "error", err)
+		if initScriptPath == "" {
+			log.Error("00-init.sh not found in the configuration files")
+			fmt.Println("Error: 00-init.sh not found. Cannot provision cluster.")
 			return
 		}
 
-		if finalConfirm {
-			log.Info("User confirmed cluster provisioning")
-			fmt.Println("Provisioning cluster...")
-			// Add logic here to run 00-init.sh
-			// This is where you would implement the actual cluster provisioning
-			// For example:
-			// err := runInitScript(filepath.Join(filepath.Dir(selectedFile), "00-init.sh"))
-			// if err != nil {
-			//     log.Error("Error provisioning cluster", "error", err)
-			//     return
-			// }
-			// fmt.Println("Cluster provisioned successfully!")
+		// Extract cloud, region, and prefix from the selected config
+		parts := strings.Split(selectedConfig, "_")
+		if len(parts) != 3 {
+			log.Error("Invalid config name format", "config", selectedConfig)
+			fmt.Println("Error: Invalid configuration name format. Cannot provision cluster.")
+			return
+		}
+		cloud, region, prefix := parts[0], parts[1], parts[2]
+
+		// Run the provisioning script
+		err := runProvisioningScript(initScriptPath, cloud, region, prefix)
+		if err != nil {
+			log.Error("Error provisioning cluster", "error", err)
+			fmt.Println("Error provisioning cluster:", err)
 		} else {
-			log.Info("User cancelled cluster provisioning")
-			fmt.Println("Cluster provisioning cancelled.")
+			fmt.Println("Cluster provisioning completed successfully!")
 		}
 	} else {
-		log.Info("User chose not to run 00-init.sh")
+		log.Info("User cancelled cluster provisioning")
 		fmt.Println("Cluster provisioning cancelled.")
 	}
 }
 
-// Add any additional cluster-related functions here
-// For example:
-// func deleteCluster() { ... }
-// func listClusters() { ... }
-// func updateCluster() { ... }
+func runProvisioningScript(scriptPath, cloud, region, prefix string) error {
+	// Create log directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("error getting home directory: %w", err)
+	}
+	logDir := filepath.Join(homeDir, ".ssot", "k1space", ".logs", cloud, region, prefix)
+	err = os.MkdirAll(logDir, 0755)
+	if err != nil {
+		return fmt.Errorf("error creating log directory: %w", err)
+	}
+
+	// Create log file
+	timestamp := time.Now().Format("20060102-150405")
+	logFileName := fmt.Sprintf("00-init-%s.log", timestamp)
+	logFilePath := filepath.Join(logDir, logFileName)
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		return fmt.Errorf("error creating log file: %w", err)
+	}
+	defer logFile.Close()
+
+	// Prepare command
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Dir = filepath.Dir(scriptPath)
+
+	// Set up pipes for stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stderr pipe: %w", err)
+	}
+
+	// Start the command
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("error starting script: %w", err)
+	}
+
+	// Create a channel to signal when we're done reading output
+	done := make(chan bool)
+
+	// Function to read from a pipe and write to both console and log file
+	readAndLog := func(pipe io.Reader, prefix string) {
+		scanner := bufio.NewScanner(pipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Println(prefix, line)
+			logFile.WriteString(prefix + line + "\n")
+		}
+		done <- true
+	}
+
+	// Start goroutines to read stdout and stderr
+	go readAndLog(stdout, "")
+	go readAndLog(stderr, "ERROR: ")
+
+	// Wait for both stdout and stderr to be fully read
+	<-done
+	<-done
+
+	// Wait for the command to finish
+	err = cmd.Wait()
+	if err != nil {
+		return fmt.Errorf("error running script: %w", err)
+	}
+
+	return nil
+}
