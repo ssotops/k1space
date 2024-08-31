@@ -1,10 +1,14 @@
 package main
 
 import (
+  "bufio"
+  "io"
 	"fmt"
 	"os"
+  "os/exec"
 	"path/filepath"
 	"strings"
+  "time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/log"
@@ -99,10 +103,114 @@ func provisionCluster() {
 	if confirmProvision {
 		log.Info("User confirmed cluster provisioning")
 		fmt.Println("Provisioning cluster...")
-		// Add logic here to run 00-init.sh
-		// This is where you would implement the actual cluster provisioning
+
+		// Find the 00-init.sh file
+		var initScriptPath string
+		for _, file := range filePaths {
+			if strings.HasSuffix(file, "00-init.sh") {
+				initScriptPath = file
+				break
+			}
+		}
+
+		if initScriptPath == "" {
+			log.Error("00-init.sh not found in the configuration files")
+			fmt.Println("Error: 00-init.sh not found. Cannot provision cluster.")
+			return
+		}
+
+		// Extract cloud, region, and prefix from the selected config
+		parts := strings.Split(selectedConfig, "_")
+		if len(parts) != 3 {
+			log.Error("Invalid config name format", "config", selectedConfig)
+			fmt.Println("Error: Invalid configuration name format. Cannot provision cluster.")
+			return
+		}
+		cloud, region, prefix := parts[0], parts[1], parts[2]
+
+		// Run the provisioning script
+		err := runProvisioningScript(initScriptPath, cloud, region, prefix)
+		if err != nil {
+			log.Error("Error provisioning cluster", "error", err)
+			fmt.Println("Error provisioning cluster:", err)
+		} else {
+			fmt.Println("Cluster provisioning completed successfully!")
+		}
 	} else {
 		log.Info("User cancelled cluster provisioning")
 		fmt.Println("Cluster provisioning cancelled.")
 	}
+}
+
+func runProvisioningScript(scriptPath, cloud, region, prefix string) error {
+	// Create log directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("error getting home directory: %w", err)
+	}
+	logDir := filepath.Join(homeDir, ".ssot", "k1space", ".logs", cloud, region, prefix)
+	err = os.MkdirAll(logDir, 0755)
+	if err != nil {
+		return fmt.Errorf("error creating log directory: %w", err)
+	}
+
+	// Create log file
+	timestamp := time.Now().Format("20060102-150405")
+	logFileName := fmt.Sprintf("00-init-%s.log", timestamp)
+	logFilePath := filepath.Join(logDir, logFileName)
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		return fmt.Errorf("error creating log file: %w", err)
+	}
+	defer logFile.Close()
+
+	// Prepare command
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Dir = filepath.Dir(scriptPath)
+
+	// Set up pipes for stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stderr pipe: %w", err)
+	}
+
+	// Start the command
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("error starting script: %w", err)
+	}
+
+	// Create a channel to signal when we're done reading output
+	done := make(chan bool)
+
+	// Function to read from a pipe and write to both console and log file
+	readAndLog := func(pipe io.Reader, prefix string) {
+		scanner := bufio.NewScanner(pipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Println(prefix, line)
+			logFile.WriteString(prefix + line + "\n")
+		}
+		done <- true
+	}
+
+	// Start goroutines to read stdout and stderr
+	go readAndLog(stdout, "")
+	go readAndLog(stderr, "ERROR: ")
+
+	// Wait for both stdout and stderr to be fully read
+	<-done
+	<-done
+
+	// Wait for the command to finish
+	err = cmd.Wait()
+	if err != nil {
+		return fmt.Errorf("error running script: %w", err)
+	}
+
+	return nil
 }

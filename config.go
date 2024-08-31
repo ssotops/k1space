@@ -434,7 +434,11 @@ func generateFiles(config *CloudConfig, kubefirstPath string) error {
 
 func generateEnvContent(config *CloudConfig) string {
 	var content strings.Builder
-	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
+	prefix := fmt.Sprintf("%s_%s_%s",
+		strings.ReplaceAll(config.StaticPrefix, "-", "_"),
+		strings.ToUpper(strings.ReplaceAll(config.CloudPrefix, "-", "_")),
+		strings.ToUpper(strings.ReplaceAll(config.Region, "-", "_")))
+
 	config.Flags.Range(func(k, v interface{}) bool {
 		flag := k.(string)
 		value := v.(string)
