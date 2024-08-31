@@ -7,7 +7,31 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
+)
+
+var (
+	clusterTitleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7D56F4")).
+			Bold(true).
+			Padding(0, 1)
+
+	filePathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#5F9F9F")).
+			Italic(true)
+
+	contentStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#874BFD")).
+			Padding(1).
+			Width(100)
+
+	configStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#FF69B4")).
+			Padding(1).
+			Width(100)
 )
 
 func provisionCluster() {
@@ -54,101 +78,79 @@ func provisionCluster() {
 	}
 	log.Info("User selected config", "selectedConfig", selectedConfig)
 
-	// Display files in selected config
+	// Get files for the selected config
 	files := indexFile.Configs[selectedConfig].Files
-	var selectedFile string
-	fileOptions := make([]huh.Option[string], 0, len(files))
+
+	// Prepare the content for the TUI
+	var configContent strings.Builder
+	var fileContents []string
+	var filePaths []string
+
+	configContent.WriteString(fmt.Sprintf("Configuration: %s\n", selectedConfig))
+	configContent.WriteString(fmt.Sprintf("File count: %d\n", len(files)))
+
 	for _, file := range files {
-		// Remove any surrounding quotes and use only the base filename
 		cleanFile := strings.Trim(file, "\"")
-		baseFile := filepath.Base(cleanFile)
-		fileOptions = append(fileOptions, huh.NewOption(baseFile, cleanFile))
+		content, err := os.ReadFile(filepath.Clean(cleanFile))
+		if err != nil {
+			log.Error("Error reading file", "file", cleanFile, "error", err)
+			continue
+		}
+		fileContents = append(fileContents, string(content))
+		filePaths = append(filePaths, cleanFile)
 	}
 
-	log.Info("Presenting file selection to user", "optionCount", len(fileOptions))
-	form = huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Select a file").
-				Options(fileOptions...).
-				Value(&selectedFile),
-		),
-	)
+	// Create the TUI
+	var sb strings.Builder
 
-	err = form.Run()
-	if err != nil {
-		log.Error("Error selecting file", "error", err)
-		return
-	}
-	log.Info("User selected file", "selectedFile", selectedFile)
+	// Config summary
+	sb.WriteString(configStyle.Render(clusterTitleStyle.Render("Configuration Summary") + "\n" + configContent.String()))
+	sb.WriteString("\n\n")
 
-	// Read and display file contents
-	content, err := os.ReadFile(filepath.Clean(selectedFile))
-	if err != nil {
-		log.Error("Error reading file", "error", err)
-		return
+	// File contents
+	for i, content := range fileContents {
+		fileName := filepath.Base(filePaths[i])
+		sb.WriteString(contentStyle.Render(
+			clusterTitleStyle.Render(fileName) + "\n" +
+				filePathStyle.Render(filePaths[i]) + "\n\n" +
+				content,
+		))
+		sb.WriteString("\n\n")
 	}
 
-	fmt.Printf("Contents of %s:\n\n%s\n\n", filepath.Base(selectedFile), string(content))
+	// Print the TUI
+	fmt.Println(sb.String())
 
-	// Prompt user to run 00-init.sh
-	var confirmRun bool
-	form = huh.NewForm(
+	// Confirmation to provision
+	var confirmProvision bool
+	confirmForm := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title("Do you want to run 00-init.sh to provision the cluster?").
-				Value(&confirmRun),
+				Title("Do you want to proceed with provisioning the cluster?").
+				Value(&confirmProvision),
 		),
 	)
 
-	err = form.Run()
+	err = confirmForm.Run()
 	if err != nil {
 		log.Error("Error in confirmation prompt", "error", err)
 		return
 	}
 
-	if confirmRun {
-		// Summarize the provision cluster process
-		fmt.Println("\nProvisioning Cluster Summary:")
-		fmt.Printf("- Configuration: %s\n", selectedConfig)
-		fmt.Printf("- Init Script: %s\n", filepath.Join(filepath.Dir(selectedFile), "00-init.sh"))
-		fmt.Printf("- Kubefirst Script: %s\n", filepath.Join(filepath.Dir(selectedFile), "01-kubefirst-cloud.sh"))
-		fmt.Printf("- Environment File: %s\n", filepath.Join(filepath.Dir(selectedFile), ".local.cloud.env"))
-
-		// Final confirmation
-		var finalConfirm bool
-		form = huh.NewForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title("Do you want to proceed with provisioning the cluster?").
-					Value(&finalConfirm),
-			),
-		)
-
-		err = form.Run()
-		if err != nil {
-			log.Error("Error in final confirmation prompt", "error", err)
-			return
-		}
-
-		if finalConfirm {
-			log.Info("User confirmed cluster provisioning")
-			fmt.Println("Provisioning cluster...")
-			// Add logic here to run 00-init.sh
-			// This is where you would implement the actual cluster provisioning
-			// For example:
-			// err := runInitScript(filepath.Join(filepath.Dir(selectedFile), "00-init.sh"))
-			// if err != nil {
-			//     log.Error("Error provisioning cluster", "error", err)
-			//     return
-			// }
-			// fmt.Println("Cluster provisioned successfully!")
-		} else {
-			log.Info("User cancelled cluster provisioning")
-			fmt.Println("Cluster provisioning cancelled.")
-		}
+	if confirmProvision {
+		log.Info("User confirmed cluster provisioning")
+		fmt.Println("Provisioning cluster...")
+		// Add logic here to run 00-init.sh
+		// This is where you would implement the actual cluster provisioning
+		// For example:
+		// err := runInitScript(filepath.Join(filepath.Dir(filePaths[0]), "00-init.sh"))
+		// if err != nil {
+		//     log.Error("Error provisioning cluster", "error", err)
+		//     return
+		// }
+		// fmt.Println("Cluster provisioned successfully!")
 	} else {
-		log.Info("User chose not to run 00-init.sh")
+		log.Info("User cancelled cluster provisioning")
 		fmt.Println("Cluster provisioning cancelled.")
 	}
 }
