@@ -45,6 +45,28 @@ var (
 	kubefirstAPIStyle = boxStyle.Copy().
 				BorderForeground(lipgloss.Color("#FF00FF")).
 				Width(180)
+
+	// New styles from clusters.go
+	clusterTitleStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#7D56F4")).
+				Bold(true).
+				Padding(0, 1)
+
+	filePathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#5F9F9F")).
+			Italic(true)
+
+	contentStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#874BFD")).
+			Padding(1).
+			Width(100)
+
+	configStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#FF69B4")).
+			Padding(1).
+			Width(100)
 )
 
 func renderDashboard(kubefirstAPILogs, consoleLogs, kubefirstLogs *scrollingLog) string {
@@ -146,4 +168,25 @@ func getLogPath(serviceName string) string {
 	}
 
 	return latestFile
+}
+
+func renderClusterProvisioningTUI(selectedConfig string, configContent string, fileContents []string, filePaths []string) string {
+	var sb strings.Builder
+
+	// Config summary
+	sb.WriteString(configStyle.Render(clusterTitleStyle.Render("Configuration Summary") + "\n" + configContent))
+	sb.WriteString("\n\n")
+
+	// File contents
+	for i, content := range fileContents {
+		fileName := filepath.Base(filePaths[i])
+		sb.WriteString(contentStyle.Render(
+			clusterTitleStyle.Render(fileName) + "\n" +
+				filePathStyle.Render(filePaths[i]) + "\n\n" +
+				content,
+		))
+		sb.WriteString("\n\n")
+	}
+
+	return sb.String()
 }

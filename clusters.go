@@ -7,31 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
-)
-
-var (
-	clusterTitleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7D56F4")).
-			Bold(true).
-			Padding(0, 1)
-
-	filePathStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#5F9F9F")).
-			Italic(true)
-
-	contentStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#874BFD")).
-			Padding(1).
-			Width(100)
-
-	configStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#FF69B4")).
-			Padding(1).
-			Width(100)
 )
 
 func provisionCluster() {
@@ -100,26 +76,9 @@ func provisionCluster() {
 		filePaths = append(filePaths, cleanFile)
 	}
 
-	// Create the TUI
-	var sb strings.Builder
-
-	// Config summary
-	sb.WriteString(configStyle.Render(clusterTitleStyle.Render("Configuration Summary") + "\n" + configContent.String()))
-	sb.WriteString("\n\n")
-
-	// File contents
-	for i, content := range fileContents {
-		fileName := filepath.Base(filePaths[i])
-		sb.WriteString(contentStyle.Render(
-			clusterTitleStyle.Render(fileName) + "\n" +
-				filePathStyle.Render(filePaths[i]) + "\n\n" +
-				content,
-		))
-		sb.WriteString("\n\n")
-	}
-
-	// Print the TUI
-	fmt.Println(sb.String())
+	// Render the TUI using the function from dashboard.go
+	tuiContent := renderClusterProvisioningTUI(selectedConfig, configContent.String(), fileContents, filePaths)
+	fmt.Println(tuiContent)
 
 	// Confirmation to provision
 	var confirmProvision bool
@@ -142,21 +101,8 @@ func provisionCluster() {
 		fmt.Println("Provisioning cluster...")
 		// Add logic here to run 00-init.sh
 		// This is where you would implement the actual cluster provisioning
-		// For example:
-		// err := runInitScript(filepath.Join(filepath.Dir(filePaths[0]), "00-init.sh"))
-		// if err != nil {
-		//     log.Error("Error provisioning cluster", "error", err)
-		//     return
-		// }
-		// fmt.Println("Cluster provisioned successfully!")
 	} else {
 		log.Info("User cancelled cluster provisioning")
 		fmt.Println("Cluster provisioning cancelled.")
 	}
 }
-
-// Add any additional cluster-related functions here
-// For example:
-// func deleteCluster() { ... }
-// func listClusters() { ... }
-// func updateCluster() { ... }
