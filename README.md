@@ -1,6 +1,6 @@
 # k1space
 
-k1space is a command-line tool designed to streamline the process of creating and managing cloud configurations for Kubernetes clusters created by [kubefirst](https://kubefirst.io). It provides an interactive interface to configure various cloud providers and generate the necessary scripts for cluster provisioning.
+k1space is a command-line tool designed to streamline the process of creating and managing cloud configurations for Kubernetes clusters created by [kubefirst](https://kubefirst.io). It provides an interactive interface to configure various cloud providers, generate necessary scripts for cluster provisioning, and manage Kubefirst repositories.
 
 ## Features
 
@@ -9,6 +9,9 @@ k1space is a command-line tool designed to streamline the process of creating an
 - Automatic retrieval of cloud regions and node types
 - Generation of configuration files and initialization scripts
 - Integration with Kubefirst for Kubernetes cluster provisioning
+- Management of Kubefirst repositories ([kubefirst](https://github.com/konstructio/kubefirst), [console](https://github.com/konstructio/console), [kubefirst-api](https://github.com/konstructio/kubefirst-api))
+- Cluster provisioning capabilities
+- Version management and upgrade functionality
 
 ## Installation
 
@@ -30,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/ssotops/k1space/master/install.sh |
 
 ## Usage
 
-To start using k1space, simply run the following command in your terminal:
+To start using k1space, run the following command in your terminal:
 
 ```bash
 k1space
@@ -38,11 +41,12 @@ k1space
 
 This will launch the interactive menu where you can:
 
-1. Create and manage cloud configurations
-2. Set up Kubefirst repositories
+1. Manage cloud configurations
+2. Set up and manage Kubefirst repositories
 3. Provision Kubernetes clusters
+4. Perform k1space-specific operations
 
-Follow the on-screen prompts to configure your cloud provider, select regions, and set up your cluster.
+Follow the on-screen prompts to navigate through the various options and configure your environment.
 
 ## Configuration
 
@@ -58,6 +62,52 @@ This directory contains:
 - `clouds.hcl`: Contains data about cloud providers, regions, and node types
 - Cloud-specific subdirectories with generated scripts and environment files
 
+## Required Environment Variables
+
+Before using k1space to provision clusters, ensure the following environment variables are set:
+
+1. `GITHUB_TOKEN`: A GitHub personal access token with the necessary scopes. You can [Create a GitHub Token with Selected Scopes](https://github.com/settings/tokens/new?scopes=repo,workflow,write:packages,admin:org,admin:public_key,admin:repo_hook,admin:org_hook,user,delete_repo,admin:ssh_signing_key) here.
+
+2. Cloud Provider-specific tokens:
+   - For Civo: `CIVO_TOKEN`
+   - For DigitalOcean: `DIGITALOCEAN_TOKEN`
+
+You can set these environment variables in your shell profile or export them before running k1space:
+
+```bash
+export GITHUB_TOKEN=your_github_token_here
+export CIVO_TOKEN=your_civo_token_here
+export DIGITALOCEAN_TOKEN=your_digitalocean_token_here
+```
+
+## Main Features
+
+### Config Management
+
+- Create new cloud configurations
+- List existing configurations
+- Delete specific configurations
+- Delete all configurations
+
+### Kubefirst Repository Management
+
+- Clone Kubefirst repositories (kubefirst, console, kubefirst-api)
+- Sync repositories to latest changes
+- Set up Kubefirst environment
+- Run Kubefirst repositories locally
+- Revert repositories to main branch
+
+### Cluster Management
+
+- Provision new Kubernetes clusters using Kubefirst
+- View cluster provisioning logs
+
+### k1space Operations
+
+- Upgrade k1space to the latest version
+- Print configuration paths
+- Display version information
+
 ## Uninstallation
 
 To uninstall k1space, you can use the provided uninstall script:
@@ -67,7 +117,3 @@ curl -fsSL https://raw.githubusercontent.com/ssotops/k1space/master/uninstall.sh
 ```
 
 This script will remove the k1space binary and optionally delete the configuration directory.
-
-## Support
-
-If you encounter any issues or have questions about k1space, please [open an issue](https://github.com/ssotops/k1space/issues) on our GitHub repository.
