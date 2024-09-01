@@ -66,7 +66,7 @@ This directory contains:
 
 Before using k1space to provision clusters, ensure the following environment variables are set:
 
-1. `GITHUB_TOKEN`: A GitHub personal access token with the necessary scopes. You can [Create a GitHub Token with Selected Scopes](https://github.com/settings/tokens/new?scopes=repo,workflow,write:packages,admin:org,admin:public_key,admin:repo_hook,admin:org_hook,user,delete_repo,admin:ssh_signing_key) here.
+1. `GITHUB_TOKEN`: A GitHub personal access token with the necessary scopes. You can [Create a GitHub Token with Selected Scopes](https://github.com/settings/tokens/new?scopes=repo,workflow,write:packages,admin:org,admin:public_key,admin:repo_hook,admin:org_hook,user,delete_repo,admin:ssh_signing_key) here. If you want to read more about the scopes that kubefirst uses, you can read more on their public docs [here](https://docs.kubefirst.io/common/gitAuth). If that link has expired or changed, visit the [Github repository responsible for their public docs](https://github.com/konstructio/kubefirst-docs).
 
 2. Cloud Provider-specific tokens:
    - For Civo: `CIVO_TOKEN`
