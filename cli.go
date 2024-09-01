@@ -18,6 +18,7 @@ func runMainMenu() string {
 					huh.NewOption("Kubefirst", "Kubefirst"),
 					huh.NewOption("Cluster", "Cluster"),
 					huh.NewOption("k1space", "k1space"),
+					huh.NewOption("Deprovision Cluster", "Deprovision Cluster"),
 					huh.NewOption("Exit", "Exit"),
 				).
 				Value(&selected),

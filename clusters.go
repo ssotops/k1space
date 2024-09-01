@@ -214,3 +214,106 @@ func runProvisioningScript(scriptPath, cloud, region, prefix string) error {
 
 	return nil
 }
+
+func deprovisionCluster() {
+    log.Info("Starting deprovisionCluster function")
+
+    // Load index file to get available configurations
+    indexFile, err := loadIndexFile()
+    if err != nil {
+        log.Error("Error loading index file", "error", err)
+        fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+        return
+    }
+
+    // Prompt user to select a cluster to deprovision
+    var selectedConfig string
+    configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
+    for config := range indexFile.Configs {
+        configOptions = append(configOptions, huh.NewOption(config, config))
+    }
+
+    form := huh.NewForm(
+        huh.NewGroup(
+            huh.NewSelect[string]().
+                Title("Select a cluster to deprovision").
+                Options(configOptions...).
+                Value(&selectedConfig),
+        ),
+    )
+
+    err = form.Run()
+    if err != nil {
+        log.Error("Error in config selection", "error", err)
+        return
+    }
+
+    // Extract cloud, region, and prefix from the selected config
+    parts := strings.Split(selectedConfig, "_")
+    if len(parts) != 3 {
+        log.Error("Invalid config name format", "config", selectedConfig)
+        fmt.Println("Invalid configuration name format. Deprovisioning cancelled.")
+        return
+    }
+    cloud, region, prefix := parts[0], parts[1], parts[2]
+
+    // Generate deprovisioning script
+    scriptContent := generateDeprovisionScript(cloud, region, prefix)
+
+    // Write the script to a file
+    scriptPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", cloud, region, prefix, "deprovision.sh")
+    err = os.WriteFile(scriptPath, []byte(scriptContent), 0755)
+    if err != nil {
+        log.Error("Error writing deprovision script", "error", err)
+        return
+    }
+
+    fmt.Printf("Deprovisioning script generated at: %s\n", scriptPath)
+    fmt.Println("Please review the script and run it manually to deprovision the cluster.")
+}
+
+func generateDeprovisionScript(cloud, region, prefix string) string {
+    return fmt.Sprintf(`#!/bin/bash
+set -e
+
+# Install dependencies
+brew install terraform kubectl gum
+
+# Get kubeconfig
+kubectl config use-context %s-%s-%s
+
+# Get Vault token
+VAULT_TOKEN=$(kubectl -n vault get secrets/vault-unseal-secret --template='{{index .data "root-token"}}' | base64 -d)
+
+# Set environment variables
+kubefirst terraform set-env \
+  --vault-token $VAULT_TOKEN \
+  --vault-url https://vault.%s.%s.cloud \
+  --output-file .env
+source .env
+
+# Clone gitops repository
+git clone git@github.com:<my-org>/gitops.git
+cd gitops/terraform
+
+# Deprovision cloud provider resources
+cd %s
+terraform init
+terraform destroy
+
+# Deprovision git provider resources
+cd ../github  # or ../gitlab for GitLab
+terraform init
+terraform destroy
+
+# Clean up local resources
+cd ../../..
+rm -rf gitops
+rm .env
+
+# Remove k3d cluster
+kubefirst launch down
+
+echo "Deprovisioning complete. Please manually remove any remaining cloud resources if necessary."
+`, cloud, region, prefix, region, cloud, cloud)
+}
