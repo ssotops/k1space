@@ -111,15 +111,15 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 
 		newConfig := Config{
 			Files: []string{
-				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh")),
-				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh")),
-				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")),
+				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot/k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "00-init.sh")),
+				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot/k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, "01-kubefirst-cloud.sh")),
+				filepath.ToSlash(filepath.Join(os.Getenv("HOME"), ".ssot/k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")),
 			},
 			Flags: make(map[string]string),
 		}
 
 		// Read the .local.cloud.env file
-		envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")
+		envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot/k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix, ".local.cloud.env")
 		envContent, err := os.ReadFile(envFilePath)
 		if err != nil {
 			return fmt.Errorf("error reading .local.cloud.env: %w", err)
@@ -137,7 +137,12 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 			}
 			flagName := strings.TrimPrefix(parts[0], "export K1_"+strings.ToUpper(config.CloudPrefix)+"_"+strings.ToUpper(config.Region)+"_")
 			flagValue := strings.Trim(parts[1], "\"")
-			newConfig.Flags[strings.ToLower(flagName)] = flagValue
+
+			// Convert flag name to lowercase and replace hyphens with underscores
+			flagName = strings.ToLower(flagName)
+			flagName = strings.ReplaceAll(flagName, "-", "_")
+
+			newConfig.Flags[flagName] = flagValue
 		}
 
 		// Update or add the new configuration
@@ -152,15 +157,18 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 				indexFile.DefaultValues[k] = v
 			}
 		}
+		indexFile.DefaultValues["static_prefix"] = config.StaticPrefix
 	}
-	// Add this new section here
-	for key := range indexFile.Configs {
-		parts := strings.Split(key, "_")
-		if len(parts) != 3 {
-			// Remove invalid configs
-			delete(indexFile.Configs, key)
-		}
+
+	// Clean up default_values
+	cleanedDefaultValues := make(map[string]string)
+	for k, v := range indexFile.DefaultValues {
+		cleanKey := strings.ToLower(k)
+		cleanKey = strings.ReplaceAll(cleanKey, "-", "_")
+		cleanKey = strings.TrimPrefix(cleanKey, "export_"+strings.ToLower(config.StaticPrefix)+"_"+strings.ToLower(config.CloudPrefix)+"_"+strings.ToLower(config.Region)+"_")
+		cleanedDefaultValues[cleanKey] = v
 	}
+	indexFile.DefaultValues = cleanedDefaultValues
 
 	log.Info("Updated indexFile", "indexFile", fmt.Sprintf("%+v", indexFile))
 

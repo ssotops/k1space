@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/charmbracelet/lipgloss"
-  "sync"
+	"sync"
 	"time"
 )
 

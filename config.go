@@ -25,15 +25,8 @@ func createConfig(config *CloudConfig) {
 
 	log.Info("Starting createConfig function")
 
-	log.Info("CloudConfig initialized", "config", fmt.Sprintf("%+v", config))
-
-	defer func() {
-		log.Info("Final config state", "config", fmt.Sprintf("%+v", config))
-	}()
-
 	if config.Flags == nil {
 		config.Flags = &sync.Map{}
-		log.Info("Reinitializing config.Flags")
 	}
 
 	indexFile, err := loadIndexFile()
@@ -41,14 +34,48 @@ func createConfig(config *CloudConfig) {
 		log.Error("Error loading index file", "error", err)
 		return
 	}
-	log.Info("Index file loaded", "indexFile", fmt.Sprintf("%+v", indexFile))
 
 	cloudsFile, err := loadCloudsFile()
 	if err != nil {
 		log.Error("Error loading clouds file", "error", err)
 		return
 	}
-	log.Info("Clouds file loaded", "cloudsFile", fmt.Sprintf("%+v", cloudsFile))
+
+	// Check if default_values is empty and offer to use a previous config
+	if len(indexFile.DefaultValues) == 0 && len(indexFile.Configs) > 0 {
+		var usePreviousConfig bool
+		err := huh.NewConfirm().
+			Title("Do you want to use a previous config as default values?").
+			Value(&usePreviousConfig).
+			Run()
+
+		if err != nil {
+			log.Error("Error in user prompt", "error", err)
+			return
+		}
+
+		if usePreviousConfig {
+			var selectedConfig string
+			configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
+			for configName := range indexFile.Configs {
+				configOptions = append(configOptions, huh.NewOption(configName, configName))
+			}
+
+			err := huh.NewSelect[string]().
+				Title("Select a previous config to use as default values").
+				Options(configOptions...).
+				Value(&selectedConfig).
+				Run()
+
+			if err != nil {
+				log.Error("Error in config selection", "error", err)
+				return
+			}
+
+			// Copy selected config's flags to default_values
+			indexFile.DefaultValues = indexFile.Configs[selectedConfig].Flags
+		}
+	}
 
 	kubefirstPath, err := promptKubefirstBinary()
 	if err != nil {
@@ -56,12 +83,18 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 
+	// Use default values for pre-filling
+	defaultStaticPrefix := indexFile.DefaultValues["static_prefix"]
+	if defaultStaticPrefix == "" {
+		defaultStaticPrefix = "K1"
+	}
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Enter static prefix").
 				Description("Default is 'K1'").
-				Placeholder("K1").
+				Placeholder(defaultStaticPrefix).
 				Value(&config.StaticPrefix),
 
 			huh.NewSelect[string]().
@@ -76,9 +109,9 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 
-	// If the user didn't enter anything, use the default "K1"
+	// If the user didn't enter anything, use the default
 	if config.StaticPrefix == "" {
-		config.StaticPrefix = "K1"
+		config.StaticPrefix = defaultStaticPrefix
 	}
 
 	log.Info("Initial form completed", "StaticPrefix", config.StaticPrefix, "CloudPrefix", config.CloudPrefix)
@@ -123,7 +156,6 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 	log.Info("Flags retrieved for cloud provider", "Flags", flags)
-	log.Info("Config state after fetching kubefirst flags", "config", fmt.Sprintf("%+v", config))
 
 	if len(flags) == 0 {
 		log.Error("No flags found for the selected cloud provider")
@@ -135,7 +167,7 @@ func createConfig(config *CloudConfig) {
 
 	for flag, description := range flags {
 		defaultValue := indexFile.DefaultValues[flag]
-		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
+		flagInput := struct{ Name, Value string }{Name: flag, Value: ""}
 		flagInputs = append(flagInputs, flagInput)
 
 		var field huh.Field
@@ -166,7 +198,6 @@ func createConfig(config *CloudConfig) {
 	flagForm := huh.NewForm(
 		huh.NewGroup(flagGroups...),
 	)
-	log.Info("Config state before flag input form", "config", fmt.Sprintf("%+v", config))
 
 	err = flagForm.Run()
 	if err != nil {
@@ -174,11 +205,12 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 
-	log.Info("Debug: Right before updating config.Flags in loop", "config", fmt.Sprintf("%+v", config))
-	for i, fi := range flagInputs {
-		log.Info("Debug: Starting flag update", "index", i, "name", fi.Name, "value", fi.Value)
+	for _, fi := range flagInputs {
+		if fi.Value == "" {
+			fi.Value = indexFile.DefaultValues[fi.Name]
+		}
 		config.Flags.Store(fi.Name, fi.Value)
-		log.Info("Debug: After updating flag", "index", i, "config", fmt.Sprintf("%+v", config))
+		log.Info("Flag updated", "name", fi.Name, "value", fi.Value)
 
 		if fi.Name == "node-type" {
 			config.SelectedNodeType = fi.Value
@@ -187,9 +219,6 @@ func createConfig(config *CloudConfig) {
 			config.Region = fi.Value
 		}
 	}
-	log.Info("Debug: After flag update loop", "config", fmt.Sprintf("%+v", config))
-
-	log.Info("After updating flags", "config", fmt.Sprintf("%+v", config))
 
 	err = generateFiles(config, kubefirstPath)
 	if err != nil {
@@ -212,29 +241,26 @@ func createConfig(config *CloudConfig) {
 	}
 	log.Info("Clouds file updated successfully")
 
-	// Define baseDir
+	// Print summary and next steps
+	printConfigSummary(config)
+}
+
+func printConfigSummary(config *CloudConfig) {
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 
-	// Pretty-print the summary
 	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))
-	fmt.Println()
-
-	fmt.Printf("☁️ Cloud Provider: %s\n", config.CloudPrefix)
+	fmt.Printf("\n☁️ Cloud Provider: %s\n", config.CloudPrefix)
 	fmt.Printf("🌎 Region: %s\n", config.Region)
 	fmt.Printf("💻 Node Type: %s\n", config.SelectedNodeType)
 
-	// Print relevant file paths
 	fmt.Println(style.Render("\n📁 Generated Files:"))
 	filePrefix := "  "
 	fmt.Printf("%sInit Script: %s\n", filePrefix, filepath.Join(baseDir, "00-init.sh"))
 	fmt.Printf("%sKubefirst Script: %s\n", filePrefix, filepath.Join(baseDir, "01-kubefirst-cloud.sh"))
 	fmt.Printf("%sEnvironment File: %s\n", filePrefix, filepath.Join(baseDir, ".local.cloud.env"))
 
-	// Print command to run the generated init script
 	fmt.Println(style.Render("\n🚀 To run the initialization script, use the following command:"))
 	fmt.Printf("cd %s && ./00-init.sh\n", baseDir)
-
-	log.Info("createConfig function completed successfully")
 }
 
 func loadCloudsFile() (CloudsFile, error) {
