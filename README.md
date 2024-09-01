@@ -117,16 +117,3 @@ curl -fsSL https://raw.githubusercontent.com/ssotops/k1space/master/uninstall.sh
 ```
 
 This script will remove the k1space binary and optionally delete the configuration directory.
-
-## Support
-
-If you encounter any issues or have questions about k1space, please [open an issue](https://github.com/ssotops/k1space/issues) on our GitHub repository.
-
-## Contributing
-
-Contributions to k1space are welcome! Please refer to our [contributing guidelines](CONTRIBUTING.md) for more information on how to get started.
-
-## License
-
-k1space is released under the [MIT License](LICENSE).
-
