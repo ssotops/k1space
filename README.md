@@ -9,7 +9,7 @@ k1space is a command-line tool designed to streamline the process of creating an
 - Automatic retrieval of cloud regions and node types
 - Generation of configuration files and initialization scripts
 - Integration with Kubefirst for Kubernetes cluster provisioning
-- Management of Kubefirst repositories (kubefirst, console, kubefirst-api)
+- Management of Kubefirst repositories ([kubefirst](https://github.com/konstructio/kubefirst), [console](https://github.com/konstructio/console), [kubefirst-api](https://github.com/konstructio/kubefirst-api))
 - Cluster provisioning capabilities
 - Version management and upgrade functionality
 
