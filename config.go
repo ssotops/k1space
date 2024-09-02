@@ -517,7 +517,6 @@ op run --env-file="./.local.cloud.env" -- sh ./01-kubefirst-cloud.sh
 func generateKubefirstContent(config *CloudConfig, kubefirstPath string) string {
 	var content strings.Builder
 	content.WriteString("#!/bin/bash\n\n")
-	content.WriteString("./prepare/01-check-dependencies.sh\n\n")
 	content.WriteString(fmt.Sprintf("%s %s create \\\n", kubefirstPath, strings.ToLower(config.CloudPrefix)))
 
 	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
