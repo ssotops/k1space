@@ -13,29 +13,29 @@ import (
 )
 
 func loadIndexFile() (IndexFile, error) {
-	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
+	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "config.hcl")
 	var indexFile IndexFile
 
-	log.Info("Attempting to read index.hcl", "path", indexPath)
+	log.Info("Attempting to read config.hcl", "path", indexPath)
 
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		log.Info("index.hcl does not exist, creating a new one")
+		log.Info("config.hcl does not exist, creating a new one")
 		err := createOrUpdateIndexFile(indexPath, IndexFile{
 			Version:     1,
 			LastUpdated: time.Now().UTC().Format(time.RFC3339),
 			Configs:     make(map[string]Config),
 		})
 		if err != nil {
-			return indexFile, fmt.Errorf("error creating index.hcl: %w", err)
+			return indexFile, fmt.Errorf("error creating config.hcl: %w", err)
 		}
 	}
 
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
-		log.Error("Failed to read index.hcl", "error", err)
-		return indexFile, fmt.Errorf("error reading index.hcl: %w", err)
+		log.Error("Failed to read config.hcl", "error", err)
+		return indexFile, fmt.Errorf("error reading config.hcl: %w", err)
 	}
-	log.Info("Successfully read index.hcl", "bytes", len(data))
+	log.Info("Successfully read config.hcl", "bytes", len(data))
 
 	content := string(data)
 	configs := simpleHCLParser(content)
@@ -47,7 +47,7 @@ func loadIndexFile() (IndexFile, error) {
 
 	cleanupIndexFile(&indexFile)
 
-	log.Info("Finished parsing index.hcl", "configCount", len(indexFile.Configs))
+	log.Info("Finished parsing config.hcl", "configCount", len(indexFile.Configs))
 	return indexFile, nil
 }
 
@@ -79,12 +79,12 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 
 	err := os.MkdirAll(filepath.Dir(path), 0755)
 	if err != nil {
-		return fmt.Errorf("error creating directory for index.hcl: %w", err)
+		return fmt.Errorf("error creating directory for config.hcl: %w", err)
 	}
 
 	err = os.WriteFile(path, f.Bytes(), 0644)
 	if err != nil {
-		return fmt.Errorf("error writing index.hcl: %w", err)
+		return fmt.Errorf("error writing config.hcl: %w", err)
 	}
 
 	return nil
@@ -93,7 +93,7 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 	log.Info("Starting updateIndexFile function", "config", fmt.Sprintf("%+v", config), "indexFile", fmt.Sprintf("%+v", indexFile))
 
-	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "index.hcl")
+	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "config.hcl")
 
 	// Update LastUpdated
 	indexFile.LastUpdated = time.Now().UTC().Format(time.RFC3339)

@@ -517,7 +517,6 @@ op run --env-file="./.local.cloud.env" -- sh ./01-kubefirst-cloud.sh
 func generateKubefirstContent(config *CloudConfig, kubefirstPath string) string {
 	var content strings.Builder
 	content.WriteString("#!/bin/bash\n\n")
-	content.WriteString("./prepare/01-check-dependencies.sh\n\n")
 	content.WriteString(fmt.Sprintf("%s %s create \\\n", kubefirstPath, strings.ToLower(config.CloudPrefix)))
 
 	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
@@ -667,7 +666,7 @@ func deleteConfig() {
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
-		fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+		fmt.Println("Failed to load configurations. Please ensure that the config.hcl file exists and is correctly formatted.")
 		return
 	}
 
@@ -746,7 +745,7 @@ func deleteConfig() {
 		return
 	}
 
-	// Delete the config from index.hcl
+	// Delete the config from config.hcl
 	delete(indexFile.Configs, selectedConfig)
 	err = updateIndexFile(&CloudConfig{Flags: &sync.Map{}}, indexFile)
 	if err != nil {
@@ -792,7 +791,7 @@ func listConfigs() {
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
-		fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+		fmt.Println("Failed to load configurations. Please ensure that the config.hcl file exists and is correctly formatted.")
 		return
 	}
 
@@ -850,13 +849,13 @@ func deleteAllConfigs() {
 
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 
-	// Delete index.hcl
-	indexPath := filepath.Join(baseDir, "index.hcl")
+	// Delete config.hcl
+	indexPath := filepath.Join(baseDir, "config.hcl")
 	err = os.Remove(indexPath)
 	if err != nil && !os.IsNotExist(err) {
-		log.Error("Error deleting index.hcl", "error", err)
+		log.Error("Error deleting config.hcl", "error", err)
 	} else {
-		log.Info("Deleted index.hcl")
+		log.Info("Deleted config.hcl")
 	}
 
 	// Delete clouds.hcl
