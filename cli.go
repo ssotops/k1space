@@ -46,6 +46,7 @@ func runConfigMenu() {
 						huh.NewOption("Create Config", "Create Config"),
 						huh.NewOption("Delete Config", "Delete Config"),
 						huh.NewOption("Delete All Configs", "Delete All Configs"),
+						huh.NewOption("Edit Kubefirst Binary Used for Config", "Edit Kubefirst Binary"),
 						huh.NewOption("Back", "Back"),
 					).
 					Value(&selected),
@@ -67,6 +68,8 @@ func runConfigMenu() {
 			deleteConfig()
 		case "Delete All Configs":
 			deleteAllConfigs()
+		case "Edit Kubefirst Binary":
+			editKubefirstBinaryForConfig()
 		case "Back":
 			return
 		}

@@ -899,3 +899,142 @@ func printSummaryTable(summary [][]string) {
 		}
 	}
 }
+
+func editKubefirstBinaryForConfig() {
+	// Load existing configurations
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		log.Error("Error loading index file", "error", err)
+		return
+	}
+
+	// Prepare options for config selection
+	configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
+	for configName := range indexFile.Configs {
+		configOptions = append(configOptions, huh.NewOption(configName, configName))
+	}
+
+	if len(configOptions) == 0 {
+		fmt.Println("No configurations found. Please create a configuration first.")
+		return
+	}
+
+	// Select a configuration
+	var selectedConfig string
+	err = huh.NewSelect[string]().
+		Title("Select a configuration to edit").
+		Options(configOptions...).
+		Value(&selectedConfig).
+		Run()
+
+	if err != nil {
+		log.Error("Error in config selection", "error", err)
+		return
+	}
+
+	// Select Kubefirst binary option
+	var binaryOption string
+	err = huh.NewSelect[string]().
+		Title("Choose the Kubefirst binary option:").
+		Options(
+			huh.NewOption("Use ~/.ssot/k1space/.repositories/kubefirst/kubefirst", "repo"),
+			huh.NewOption("Specify a custom path", "custom"),
+		).
+		Value(&binaryOption).
+		Run()
+
+	if err != nil {
+		log.Error("Error in binary option selection", "error", err)
+		return
+	}
+
+	var kubefirstPath string
+	switch binaryOption {
+	case "repo":
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			log.Error("Error getting user home directory", "error", err)
+			return
+		}
+		kubefirstPath = filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst", "kubefirst")
+	case "custom":
+		err = huh.NewInput().
+			Title("Enter the path to the Kubefirst binary").
+			Value(&kubefirstPath).
+			Run()
+
+		if err != nil {
+			log.Error("Error getting custom path", "error", err)
+			return
+		}
+	}
+
+	log.Info("Selected configuration", "config", selectedConfig)
+	log.Info("Selected Kubefirst binary option", "option", binaryOption)
+	log.Info("Kubefirst binary path", "path", kubefirstPath)
+
+	// Update the 01-kubefirst-cloud.sh file
+	configDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
+	parts := strings.Split(selectedConfig, "_")
+	if len(parts) != 3 {
+		log.Error("Invalid config name format", "config", selectedConfig)
+		return
+	}
+	cloudProvider, region, prefix := parts[0], parts[1], parts[2]
+	scriptPath := filepath.Join(configDir, strings.ToLower(cloudProvider), strings.ToLower(region), prefix, "01-kubefirst-cloud.sh")
+
+	log.Info("Updating Kubefirst script", "scriptPath", scriptPath, "kubefirstPath", kubefirstPath)
+
+	err = updateKubefirstScript(scriptPath, kubefirstPath)
+	if err != nil {
+		log.Error("Error updating Kubefirst script", "error", err)
+		return
+	}
+
+	log.Info("Successfully updated Kubefirst script")
+	fmt.Printf("Successfully updated Kubefirst binary for configuration '%s'\n", selectedConfig)
+}
+
+func updateKubefirstScript(scriptPath, kubefirstPath string) error {
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return fmt.Errorf("error reading script file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	if len(lines) == 0 {
+		return fmt.Errorf("script file is empty")
+	}
+
+	// Find the line that contains the kubefirst command
+	kubefirstLineIndex := -1
+	for i, line := range lines {
+		if strings.Contains(line, "kubefirst ") {
+			kubefirstLineIndex = i
+			break
+		}
+	}
+
+	if kubefirstLineIndex == -1 {
+		return fmt.Errorf("kubefirst command not found in script")
+	}
+
+	// Update the Kubefirst binary path
+	kubefirstLine := lines[kubefirstLineIndex]
+	parts := strings.Fields(kubefirstLine)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid kubefirst command format")
+	}
+
+	// Replace the first part (the binary path) with the new kubefirstPath
+	parts[0] = kubefirstPath
+	lines[kubefirstLineIndex] = strings.Join(parts, " ")
+
+	updatedContent := strings.Join(lines, "\n")
+	err = os.WriteFile(scriptPath, []byte(updatedContent), 0644)
+	if err != nil {
+		return fmt.Errorf("error writing updated script: %w", err)
+	}
+
+	return nil
+}
