@@ -21,9 +21,9 @@ func loadIndexFile() (IndexFile, error) {
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
 		log.Info("index.hcl does not exist, creating a new one")
 		err := createOrUpdateIndexFile(indexPath, IndexFile{
-			Version:       1,
-			LastUpdated:   time.Now().UTC().Format(time.RFC3339),
-			Configs:       make(map[string]Config),
+			Version:     1,
+			LastUpdated: time.Now().UTC().Format(time.RFC3339),
+			Configs:     make(map[string]Config),
 		})
 		if err != nil {
 			return indexFile, fmt.Errorf("error creating index.hcl: %w", err)
@@ -128,9 +128,13 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 			if len(parts) != 2 {
 				continue
 			}
-			flagName := strings.TrimPrefix(parts[0], "export K1_"+strings.ToUpper(config.CloudPrefix)+"_"+strings.ToUpper(config.Region)+"_")
+			flagName := strings.TrimPrefix(parts[0], "export ")
 			flagValue := strings.Trim(parts[1], "\"")
-			newConfig.Flags[strings.ToLower(flagName)] = flagValue
+
+			// Ensure the flag name is in uppercase and uses underscores
+			flagName = strings.ToUpper(strings.ReplaceAll(flagName, "-", "_"))
+
+			newConfig.Flags[flagName] = flagValue
 		}
 
 		// Update or add the new configuration

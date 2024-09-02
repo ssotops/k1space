@@ -170,7 +170,28 @@ func createConfig(config *CloudConfig) {
 		var defaultValue string
 		if usePreviousConfig {
 			if prevConfig, ok := indexFile.Configs[selectedConfig]; ok {
-				defaultValue = prevConfig.Flags[flag]
+				// Create a normalized version of the flag name
+				normalizedFlag := strings.ToUpper(strings.ReplaceAll(flag, "-", "_"))
+
+				// Iterate through the stored flags to find a match
+				for storedKey, storedValue := range prevConfig.Flags {
+					if strings.Contains(storedKey, normalizedFlag) {
+						defaultValue = storedValue
+						break
+					}
+				}
+
+				// Special handling for certain fields
+				switch flag {
+				case "cloud-region":
+					defaultValue = strings.TrimPrefix(defaultValue, strings.ToUpper(config.CloudPrefix)+"_")
+				case "node-type":
+					// Extract just the instance type from the stored value
+					parts := strings.Fields(defaultValue)
+					if len(parts) > 0 {
+						defaultValue = parts[0]
+					}
+				}
 			}
 		}
 		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
