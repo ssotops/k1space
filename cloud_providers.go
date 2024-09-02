@@ -66,9 +66,9 @@ func updateCivoNodeTypes(cloudsFile *CloudsFile) error {
 }
 
 func getDigitalOceanClient() (*godo.Client, error) {
-	token := os.Getenv("DIGITALOCEAN_TOKEN")
+	token := os.Getenv("DO_TOKEN")
 	if token == "" {
-		return nil, fmt.Errorf("DIGITALOCEAN_TOKEN not found in environment. Please set it and try again")
+		return nil, fmt.Errorf("DO_TOKEN not found in environment. Please set it and try again")
 	}
 	return godo.NewFromToken(token), nil
 }
@@ -195,7 +195,7 @@ func checkRequiredTokens(cloudProvider string) (bool, string) {
         tokenName = "CIVO_TOKEN"
         instructions = "You can create a new Civo API token at https://www.civo.com/account/security"
     case "DigitalOcean":
-        tokenName = "DIGITALOCEAN_TOKEN"
+        tokenName = "DO_TOKEN"
         instructions = "You can create a new DigitalOcean API token at https://cloud.digitalocean.com/account/api/tokens"
     default:
         return true, ""

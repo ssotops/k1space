@@ -70,14 +70,14 @@ Before using k1space to provision clusters, ensure the following environment var
 
 2. Cloud Provider-specific tokens:
    - For Civo: `CIVO_TOKEN`
-   - For DigitalOcean: `DIGITALOCEAN_TOKEN`
+   - For DigitalOcean: `DO_TOKEN`
 
 You can set these environment variables in your shell profile or export them before running k1space:
 
 ```bash
 export GITHUB_TOKEN=your_github_token_here
 export CIVO_TOKEN=your_civo_token_here
-export DIGITALOCEAN_TOKEN=your_digitalocean_token_here
+export DO_TOKEN=your_DO_TOKEN_here
 ```
 
 ## Main Features
