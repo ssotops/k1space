@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/charmbracelet/lipgloss"
-  "sync"
+	"sync"
 	"time"
 )
 
@@ -36,10 +36,9 @@ func NewCloudConfig() *CloudConfig {
 }
 
 type IndexFile struct {
-	Version       int               `hcl:"version"`
-	LastUpdated   string            `hcl:"last_updated"`
-	Configs       map[string]Config `hcl:"configs"`
-	DefaultValues map[string]string `hcl:"default_values"`
+	Version     int               `hcl:"version"`
+	LastUpdated string            `hcl:"last_updated"`
+	Configs     map[string]Config `hcl:"configs"`
 }
 
 type Config struct {

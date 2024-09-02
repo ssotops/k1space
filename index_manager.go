@@ -21,10 +21,9 @@ func loadIndexFile() (IndexFile, error) {
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
 		log.Info("index.hcl does not exist, creating a new one")
 		err := createOrUpdateIndexFile(indexPath, IndexFile{
-			Version:       1,
-			LastUpdated:   time.Now().UTC().Format(time.RFC3339),
-			Configs:       make(map[string]Config),
-			DefaultValues: make(map[string]string),
+			Version:     1,
+			LastUpdated: time.Now().UTC().Format(time.RFC3339),
+			Configs:     make(map[string]Config),
 		})
 		if err != nil {
 			return indexFile, fmt.Errorf("error creating index.hcl: %w", err)
@@ -78,12 +77,6 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 		}
 	}
 
-	defaultValuesBlock := rootBody.AppendNewBlock("default_values", nil)
-	defaultValuesBody := defaultValuesBlock.Body()
-	for k, v := range indexFile.DefaultValues {
-		defaultValuesBody.SetAttributeValue(k, cty.StringVal(v))
-	}
-
 	err := os.MkdirAll(filepath.Dir(path), 0755)
 	if err != nil {
 		return fmt.Errorf("error creating directory for index.hcl: %w", err)
@@ -135,24 +128,19 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 			if len(parts) != 2 {
 				continue
 			}
-			flagName := strings.TrimPrefix(parts[0], "export K1_"+strings.ToUpper(config.CloudPrefix)+"_"+strings.ToUpper(config.Region)+"_")
+			flagName := strings.TrimPrefix(parts[0], "export ")
 			flagValue := strings.Trim(parts[1], "\"")
-			newConfig.Flags[strings.ToLower(flagName)] = flagValue
+
+			// Ensure the flag name is in uppercase and uses underscores
+			flagName = strings.ToUpper(strings.ReplaceAll(flagName, "-", "_"))
+
+			newConfig.Flags[flagName] = flagValue
 		}
 
 		// Update or add the new configuration
 		indexFile.Configs[key] = newConfig
-
-		// Update default values
-		if indexFile.DefaultValues == nil {
-			indexFile.DefaultValues = make(map[string]string)
-		}
-		for k, v := range newConfig.Flags {
-			if v != "" {
-				indexFile.DefaultValues[k] = v
-			}
-		}
 	}
+
 	// Add this new section here
 	for key := range indexFile.Configs {
 		parts := strings.Split(key, "_")

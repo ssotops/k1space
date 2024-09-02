@@ -56,6 +56,39 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 
+	// Prompt user if they want to use values from a previous config
+	var usePreviousConfig bool
+	var selectedConfig string
+	if len(indexFile.Configs) > 0 {
+		err = huh.NewConfirm().
+			Title("Do you want to use values from a previous config?").
+			Value(&usePreviousConfig).
+			Run()
+
+		if err != nil {
+			log.Error("Error in previous config prompt", "error", err)
+			return
+		}
+
+		if usePreviousConfig {
+			configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
+			for configName := range indexFile.Configs {
+				configOptions = append(configOptions, huh.NewOption(configName, configName))
+			}
+
+			err = huh.NewSelect[string]().
+				Title("Select a previous config to use as a template").
+				Options(configOptions...).
+				Value(&selectedConfig).
+				Run()
+
+			if err != nil {
+				log.Error("Error in config selection", "error", err)
+				return
+			}
+		}
+	}
+
 	err = huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -134,7 +167,33 @@ func createConfig(config *CloudConfig) {
 	flagGroups := make([]huh.Field, 0, len(flags))
 
 	for flag, description := range flags {
-		defaultValue := indexFile.DefaultValues[flag]
+		var defaultValue string
+		if usePreviousConfig {
+			if prevConfig, ok := indexFile.Configs[selectedConfig]; ok {
+				// Create a normalized version of the flag name
+				normalizedFlag := strings.ToUpper(strings.ReplaceAll(flag, "-", "_"))
+
+				// Iterate through the stored flags to find a match
+				for storedKey, storedValue := range prevConfig.Flags {
+					if strings.Contains(storedKey, normalizedFlag) {
+						defaultValue = storedValue
+						break
+					}
+				}
+
+				// Special handling for certain fields
+				switch flag {
+				case "cloud-region":
+					defaultValue = strings.TrimPrefix(defaultValue, strings.ToUpper(config.CloudPrefix)+"_")
+				case "node-type":
+					// Extract just the instance type from the stored value
+					parts := strings.Fields(defaultValue)
+					if len(parts) > 0 {
+						defaultValue = parts[0]
+					}
+				}
+			}
+		}
 		flagInput := struct{ Name, Value string }{Name: flag, Value: defaultValue}
 		flagInputs = append(flagInputs, flagInput)
 
