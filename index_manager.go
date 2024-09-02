@@ -24,7 +24,6 @@ func loadIndexFile() (IndexFile, error) {
 			Version:       1,
 			LastUpdated:   time.Now().UTC().Format(time.RFC3339),
 			Configs:       make(map[string]Config),
-			DefaultValues: make(map[string]string),
 		})
 		if err != nil {
 			return indexFile, fmt.Errorf("error creating index.hcl: %w", err)
@@ -76,12 +75,6 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 		for flagK, flagV := range v.Flags {
 			flagsBody.SetAttributeValue(flagK, cty.StringVal(flagV))
 		}
-	}
-
-	defaultValuesBlock := rootBody.AppendNewBlock("default_values", nil)
-	defaultValuesBody := defaultValuesBlock.Body()
-	for k, v := range indexFile.DefaultValues {
-		defaultValuesBody.SetAttributeValue(k, cty.StringVal(v))
 	}
 
 	err := os.MkdirAll(filepath.Dir(path), 0755)
@@ -142,17 +135,8 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 
 		// Update or add the new configuration
 		indexFile.Configs[key] = newConfig
-
-		// Update default values
-		if indexFile.DefaultValues == nil {
-			indexFile.DefaultValues = make(map[string]string)
-		}
-		for k, v := range newConfig.Flags {
-			if v != "" {
-				indexFile.DefaultValues[k] = v
-			}
-		}
 	}
+
 	// Add this new section here
 	for key := range indexFile.Configs {
 		parts := strings.Split(key, "_")
