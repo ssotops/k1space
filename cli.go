@@ -18,7 +18,6 @@ func runMainMenu() string {
 					huh.NewOption("Kubefirst", "Kubefirst"),
 					huh.NewOption("Cluster", "Cluster"),
 					huh.NewOption("k1space", "k1space"),
-					huh.NewOption("Deprovision Cluster", "Deprovision Cluster"),
 					huh.NewOption("Exit", "Exit"),
 				).
 				Value(&selected),
@@ -85,6 +84,7 @@ func runClusterMenu() {
 					Title("Cluster Menu").
 					Options(
 						huh.NewOption("Provision Cluster", "Provision Cluster"),
+						huh.NewOption("Deprovision Cluster", "Deprovision Cluster"),
 						huh.NewOption("Back", "Back"),
 					).
 					Value(&selected),
@@ -100,6 +100,8 @@ func runClusterMenu() {
 		switch selected {
 		case "Provision Cluster":
 			provisionCluster()
+		case "Deprovision Cluster":
+			deprovisionCluster()
 		case "Back":
 			return
 		}

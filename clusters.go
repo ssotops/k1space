@@ -1,14 +1,14 @@
 package main
 
 import (
-  "bufio"
-  "io"
+	"bufio"
 	"fmt"
+	"io"
 	"os"
-  "os/exec"
+	"os/exec"
 	"path/filepath"
 	"strings"
-  "time"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/log"
@@ -16,6 +16,11 @@ import (
 
 func provisionCluster() {
 	log.Info("Starting provisionCluster function")
+
+	// Check if the K1_CONSOLE_REMOTE_URL environment variable is set; re: kubefirst.dev issue
+	value := os.Getenv("K1_CONSOLE_REMOTE_URL")
+	log.Info("K1_CONSOLE_REMOTE_URL:", value)
+
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
@@ -216,65 +221,96 @@ func runProvisioningScript(scriptPath, cloud, region, prefix string) error {
 }
 
 func deprovisionCluster() {
-    log.Info("Starting deprovisionCluster function")
+	log.Info("Starting deprovisionCluster function")
 
-    // Load index file to get available configurations
-    indexFile, err := loadIndexFile()
-    if err != nil {
-        log.Error("Error loading index file", "error", err)
-        fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
-        return
-    }
+	indexFile, err := loadIndexFile()
+	if err != nil {
+		log.Error("Error loading index file", "error", err)
+		fmt.Println("Failed to load configurations. Please ensure that the config.hcl file exists and is correctly formatted.")
+		return
+	}
 
-    // Prompt user to select a cluster to deprovision
-    var selectedConfig string
-    configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
-    for config := range indexFile.Configs {
-        configOptions = append(configOptions, huh.NewOption(config, config))
-    }
+	if len(indexFile.Configs) == 0 {
+		fmt.Println("No clusters found to deprovision.")
+		return
+	}
 
-    form := huh.NewForm(
-        huh.NewGroup(
-            huh.NewSelect[string]().
-                Title("Select a cluster to deprovision").
-                Options(configOptions...).
-                Value(&selectedConfig),
-        ),
-    )
+	var selectedConfig string
+	configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
+	for config := range indexFile.Configs {
+		configOptions = append(configOptions, huh.NewOption(config, config))
+	}
 
-    err = form.Run()
-    if err != nil {
-        log.Error("Error in config selection", "error", err)
-        return
-    }
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select a cluster to deprovision").
+				Options(configOptions...).
+				Value(&selectedConfig),
+		),
+	)
 
-    // Extract cloud, region, and prefix from the selected config
-    parts := strings.Split(selectedConfig, "_")
-    if len(parts) != 3 {
-        log.Error("Invalid config name format", "config", selectedConfig)
-        fmt.Println("Invalid configuration name format. Deprovisioning cancelled.")
-        return
-    }
-    cloud, region, prefix := parts[0], parts[1], parts[2]
+	err = form.Run()
+	if err != nil {
+		log.Error("Error in config selection", "error", err)
+		return
+	}
 
-    // Generate deprovisioning script
-    scriptContent := generateDeprovisionScript(cloud, region, prefix)
+	parts := strings.Split(selectedConfig, "_")
+	if len(parts) != 3 {
+		log.Error("Invalid config name format", "config", selectedConfig)
+		fmt.Println("Invalid configuration name format. Deprovisioning cancelled.")
+		return
+	}
+	cloud, region, prefix := parts[0], parts[1], parts[2]
 
-    // Write the script to a file
-    scriptPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", cloud, region, prefix, "deprovision.sh")
-    err = os.WriteFile(scriptPath, []byte(scriptContent), 0755)
-    if err != nil {
-        log.Error("Error writing deprovision script", "error", err)
-        return
-    }
+	scriptContent := generateDeprovisionScript(cloud, region, prefix)
+	scriptPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", cloud, region, prefix, "deprovision.sh")
+	err = os.WriteFile(scriptPath, []byte(scriptContent), 0755)
+	if err != nil {
+		log.Error("Error writing deprovision script", "error", err)
+		return
+	}
 
-    fmt.Printf("Deprovisioning script generated at: %s\n", scriptPath)
-    fmt.Println("Please review the script and run it manually to deprovision the cluster.")
+	fmt.Printf("Deprovisioning script generated at: %s\n", scriptPath)
+	fmt.Println("Please review the script and run it manually to deprovision the cluster.")
+
+	var runScript bool
+	confirmForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Do you want to run the deprovisioning script now?").
+				Value(&runScript),
+		),
+	)
+
+	err = confirmForm.Run()
+	if err != nil {
+		log.Error("Error in run script confirmation", "error", err)
+		return
+	}
+
+	if runScript {
+		cmd := exec.Command("bash", scriptPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err = cmd.Run()
+		if err != nil {
+			log.Error("Error running deprovision script", "error", err)
+			fmt.Println("Deprovisioning script encountered an error. Please check the output and try running it manually if necessary.")
+		} else {
+			fmt.Println("Deprovisioning script completed successfully.")
+		}
+	} else {
+		fmt.Println("Deprovisioning script not run. You can run it manually later.")
+	}
 }
 
 func generateDeprovisionScript(cloud, region, prefix string) string {
-    return fmt.Sprintf(`#!/bin/bash
+	return fmt.Sprintf(`#!/bin/bash
 set -e
+
+echo "Deprovisioning cluster for %s in region %s with prefix %s"
 
 # Install dependencies
 brew install terraform kubectl gum
@@ -299,12 +335,12 @@ cd gitops/terraform
 # Deprovision cloud provider resources
 cd %s
 terraform init
-terraform destroy
+terraform destroy -auto-approve
 
 # Deprovision git provider resources
 cd ../github  # or ../gitlab for GitLab
 terraform init
-terraform destroy
+terraform destroy -auto-approve
 
 # Clean up local resources
 cd ../../..
@@ -315,5 +351,5 @@ rm .env
 kubefirst launch down
 
 echo "Deprovisioning complete. Please manually remove any remaining cloud resources if necessary."
-`, cloud, region, prefix, region, cloud, cloud)
+`, cloud, region, prefix, cloud, region, prefix, region, cloud, cloud)
 }

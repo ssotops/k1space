@@ -8,33 +8,31 @@ import (
 )
 
 func main() {
-    log.SetOutput(os.Stderr)
-    printIntro()
+	log.SetOutput(os.Stderr)
+	printIntro()
 
-    err := initializeAndCleanup()
-    if err != nil {
-        log.Error("Error initializing and cleaning up", "error", err)
-        os.Exit(1)
-    }
+	err := initializeAndCleanup()
+	if err != nil {
+		log.Error("Error initializing and cleaning up", "error", err)
+		os.Exit(1)
+	}
 
-    for {
-        action := runMainMenu()
-        switch action {
-        case "Config":
-            runConfigMenu()
-        case "Kubefirst":
-            runKubefirstMenu()
-        case "Cluster":
-            runClusterMenu()
-        case "k1space":
-            runK1spaceMenu()
-        case "Deprovision Cluster":
-            deprovisionCluster()
-        case "Exit":
-            fmt.Println("Exiting k1space. Goodbye!")
-            return
-        }
-    }
+	for {
+		action := runMainMenu()
+		switch action {
+		case "Config":
+			runConfigMenu()
+		case "Kubefirst":
+			runKubefirstMenu()
+		case "Cluster":
+			runClusterMenu()
+		case "k1space":
+			runK1spaceMenu()
+		case "Exit":
+			fmt.Println("Exiting k1space. Goodbye!")
+			return
+		}
+	}
 }
 
 func initializeAndCleanup() error {
@@ -48,4 +46,3 @@ func initializeAndCleanup() error {
 	config := NewCloudConfig()
 	return updateIndexFile(config, indexFile)
 }
-
