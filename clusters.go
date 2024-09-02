@@ -19,7 +19,7 @@ func provisionCluster() {
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
-		fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+		fmt.Println("Failed to load configurations. Please ensure that the config.hcl file exists and is correctly formatted.")
 		return
 	}
 

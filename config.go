@@ -666,7 +666,7 @@ func deleteConfig() {
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
-		fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+		fmt.Println("Failed to load configurations. Please ensure that the config.hcl file exists and is correctly formatted.")
 		return
 	}
 
@@ -745,7 +745,7 @@ func deleteConfig() {
 		return
 	}
 
-	// Delete the config from index.hcl
+	// Delete the config from config.hcl
 	delete(indexFile.Configs, selectedConfig)
 	err = updateIndexFile(&CloudConfig{Flags: &sync.Map{}}, indexFile)
 	if err != nil {
@@ -791,7 +791,7 @@ func listConfigs() {
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
-		fmt.Println("Failed to load configurations. Please ensure that the index.hcl file exists and is correctly formatted.")
+		fmt.Println("Failed to load configurations. Please ensure that the config.hcl file exists and is correctly formatted.")
 		return
 	}
 
@@ -849,13 +849,13 @@ func deleteAllConfigs() {
 
 	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 
-	// Delete index.hcl
-	indexPath := filepath.Join(baseDir, "index.hcl")
+	// Delete config.hcl
+	indexPath := filepath.Join(baseDir, "config.hcl")
 	err = os.Remove(indexPath)
 	if err != nil && !os.IsNotExist(err) {
-		log.Error("Error deleting index.hcl", "error", err)
+		log.Error("Error deleting config.hcl", "error", err)
 	} else {
-		log.Info("Deleted index.hcl")
+		log.Info("Deleted config.hcl")
 	}
 
 	// Delete clouds.hcl

@@ -58,7 +58,7 @@ k1space stores its configuration files in the following directory:
 
 This directory contains:
 
-- `index.hcl`: Stores information about available configurations
+- `config.hcl`: Stores information about available configurations
 - `clouds.hcl`: Contains data about cloud providers, regions, and node types
 - Cloud-specific subdirectories with generated scripts and environment files
 
