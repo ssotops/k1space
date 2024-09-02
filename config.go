@@ -240,7 +240,11 @@ func createConfig(config *CloudConfig) {
 		log.Info("Debug: After updating flag", "index", i, "config", fmt.Sprintf("%+v", config))
 
 		if fi.Name == "node-type" {
-			config.SelectedNodeType = fi.Value
+			nodeParts := strings.Fields(fi.Value)
+			if len(nodeParts) > 0 {
+				config.Flags.Store(fi.Name, nodeParts[0])
+        log.Info("Debug: After updating node-type flag", "config", fmt.Sprintf("%+v", config))
+			}
 		}
 		if fi.Name == "cloud-region" {
 			config.Region = fi.Value
@@ -523,8 +527,11 @@ func generateKubefirstContent(config *CloudConfig, kubefirstPath string) string 
 	flags := make([]string, 0)
 	config.Flags.Range(func(k, v interface{}) bool {
 		flag := k.(string)
-		envVarName := fmt.Sprintf("%s_%s", prefix, strings.ToUpper(strings.ReplaceAll(flag, "-", "_")))
-		flags = append(flags, fmt.Sprintf("  --%s \"$%s\"", flag, envVarName))
+		value := v.(string)
+		if value != "" {
+			envVarName := fmt.Sprintf("%s_%s", prefix, strings.ToUpper(strings.ReplaceAll(flag, "-", "_")))
+			flags = append(flags, fmt.Sprintf("  --%s \"$%s\"", flag, envVarName))
+		}
 		return true
 	})
 
