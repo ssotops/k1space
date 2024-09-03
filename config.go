@@ -525,15 +525,29 @@ func generateKubefirstContent(config *CloudConfig, kubefirstPath string) string 
 	var content strings.Builder
 	content.WriteString("#!/bin/bash\n\n")
 
+	// Add a check to source the .local.cloud.env file if it hasn't been sourced already
+	content.WriteString(`# Source the .local.cloud.env file if it hasn't been sourced already
+if [ -z "$K1_ENV_SOURCED" ]; then
+    if [ -f "./.local.cloud.env" ]; then
+        source ./.local.cloud.env
+        export K1_ENV_SOURCED=true
+    else
+        echo "Error: .local.cloud.env file not found. Please run this script from the correct directory or use 00-init.sh."
+        exit 1
+    fi
+fi
+
+# Check if KUBEFIRST_PATH is set
+if [ -z "$KUBEFIRST_PATH" ]; then
+    echo "Error: KUBEFIRST_PATH is not set. Please ensure .local.cloud.env file is properly configured."
+    exit 1
+fi
+
+`)
+
 	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
-	kubefirstPathEnvVar := fmt.Sprintf("%s_KUBEFIRST_PATH", prefix)
 
-	content.WriteString(fmt.Sprintf("if [ -z \"${%s}\" ]; then\n", kubefirstPathEnvVar))
-	content.WriteString(fmt.Sprintf("    echo \"Error: %s is not set. Please ensure the configuration is correct.\"\n", kubefirstPathEnvVar))
-	content.WriteString("    exit 1\n")
-	content.WriteString("fi\n\n")
-
-	content.WriteString(fmt.Sprintf("\"${%s}\" %s create \\\n", kubefirstPathEnvVar, strings.ToLower(config.CloudPrefix)))
+	content.WriteString("\"${KUBEFIRST_PATH}\" civo create \\\n")
 
 	flags := make([]string, 0)
 	config.Flags.Range(func(k, v interface{}) bool {

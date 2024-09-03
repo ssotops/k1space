@@ -981,7 +981,7 @@ func editKubefirstBinaryForConfig() {
 
 	// Update the .local.cloud.env file
 	envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(cloudProvider), strings.ToLower(region), prefix, ".local.cloud.env")
-	err = updateEnvFile(envFilePath, selectedConfig+"_KUBEFIRST_PATH", kubefirstPath)
+	err = updateEnvFile(envFilePath, "KUBEFIRST_PATH", kubefirstPath)
 	if err != nil {
 		log.Error("Error updating .local.cloud.env file", "error", err)
 		fmt.Printf("Failed to update the .local.cloud.env file. You may need to manually edit %s\n", envFilePath)
@@ -1008,35 +1008,38 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 	// Find the line that contains the kubefirst command
 	kubefirstLineIndex := -1
 	for i, line := range lines {
-		if strings.Contains(line, "kubefirst ") {
+		if strings.Contains(line, "kubefirst ") || strings.Contains(line, "${KUBEFIRST_PATH}") {
 			kubefirstLineIndex = i
 			break
 		}
 	}
 
-	configName := filepath.Base(filepath.Dir(scriptPath))
-	envVarName := fmt.Sprintf("${%s_KUBEFIRST_PATH}", strings.ToUpper(strings.ReplaceAll(configName, "-", "_")))
-
 	if kubefirstLineIndex == -1 {
 		// If kubefirst command is not found, add it to the end of the script
-		kubefirstLine := fmt.Sprintf("%s civo create \\", envVarName)
+		kubefirstLine := "${KUBEFIRST_PATH} civo create \\"
 		lines = append(lines, "", "# Added by k1space", kubefirstLine)
 		log.Info("Added kubefirst command to script", "line", kubefirstLine)
 	} else {
 		// Update the existing kubefirst command line
-		kubefirstLine := lines[kubefirstLineIndex]
-		parts := strings.Fields(kubefirstLine)
-		if len(parts) < 2 {
-			return fmt.Errorf("invalid kubefirst command format")
-		}
-
-		// Replace the first part (the binary path) with the new kubefirstPath
-		parts[0] = envVarName
-		lines[kubefirstLineIndex] = strings.Join(parts, " ")
+		lines[kubefirstLineIndex] = "${KUBEFIRST_PATH} civo create \\"
 		log.Info("Updated existing kubefirst command in script", "line", lines[kubefirstLineIndex])
 	}
 
-	updatedContent := strings.Join(lines, "\n")
+	// Remove any duplicate kubefirst commands
+	newLines := []string{}
+	seenKubefirst := false
+	for _, line := range lines {
+		if strings.Contains(line, "kubefirst ") || strings.Contains(line, "${KUBEFIRST_PATH}") {
+			if !seenKubefirst {
+				newLines = append(newLines, line)
+				seenKubefirst = true
+			}
+		} else {
+			newLines = append(newLines, line)
+		}
+	}
+
+	updatedContent := strings.Join(newLines, "\n")
 	err = os.WriteFile(scriptPath, []byte(updatedContent), 0644)
 	if err != nil {
 		return fmt.Errorf("error writing updated script: %w", err)

@@ -437,11 +437,11 @@ func waitForQuit() {
 }
 
 func getGlobalKubefirstPath() (string, error) {
-    path, err := exec.LookPath("kubefirst")
-    if err != nil {
-        return "", fmt.Errorf("global kubefirst not found: %w", err)
-    }
-    return path, nil
+	path, err := exec.LookPath("kubefirst")
+	if err != nil {
+		return "", fmt.Errorf("global kubefirst not found: %w", err)
+	}
+	return path, nil
 }
 
 func updateEnvFile(filePath, key, value string) error {
@@ -452,19 +452,22 @@ func updateEnvFile(filePath, key, value string) error {
 
 	lines := strings.Split(string(content), "\n")
 	updated := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, "export "+key+"=") {
-			lines[i] = fmt.Sprintf("export %s=\"%s\"", key, value)
+	newLines := []string{}
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "export KUBEFIRST_PATH=") {
+			newLines = append(newLines, fmt.Sprintf("export KUBEFIRST_PATH=\"%s\"", value))
 			updated = true
-			break
+		} else if !strings.Contains(line, "_KUBEFIRST_PATH=") {
+			newLines = append(newLines, line)
 		}
 	}
 
 	if !updated {
-		lines = append(lines, fmt.Sprintf("export %s=\"%s\"", key, value))
+		newLines = append(newLines, fmt.Sprintf("export KUBEFIRST_PATH=\"%s\"", value))
 	}
 
-	updatedContent := strings.Join(lines, "\n")
+	updatedContent := strings.Join(newLines, "\n")
 	err = os.WriteFile(filePath, []byte(updatedContent), 0644)
 	if err != nil {
 		return fmt.Errorf("error writing updated .local.cloud.env file: %w", err)
