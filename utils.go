@@ -435,3 +435,40 @@ func waitForQuit() {
 		}
 	}
 }
+
+func getGlobalKubefirstPath() (string, error) {
+    path, err := exec.LookPath("kubefirst")
+    if err != nil {
+        return "", fmt.Errorf("global kubefirst not found: %w", err)
+    }
+    return path, nil
+}
+
+func updateEnvFile(filePath, key, value string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("error reading .local.cloud.env file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	updated := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "export "+key+"=") {
+			lines[i] = fmt.Sprintf("export %s=\"%s\"", key, value)
+			updated = true
+			break
+		}
+	}
+
+	if !updated {
+		lines = append(lines, fmt.Sprintf("export %s=\"%s\"", key, value))
+	}
+
+	updatedContent := strings.Join(lines, "\n")
+	err = os.WriteFile(filePath, []byte(updatedContent), 0644)
+	if err != nil {
+		return fmt.Errorf("error writing updated .local.cloud.env file: %w", err)
+	}
+
+	return nil
+}

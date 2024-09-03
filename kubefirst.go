@@ -901,14 +901,12 @@ func printSummaryTable(summary [][]string) {
 }
 
 func editKubefirstBinaryForConfig() {
-	// Load existing configurations
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
 		return
 	}
 
-	// Prepare options for config selection
 	configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
 	for configName := range indexFile.Configs {
 		configOptions = append(configOptions, huh.NewOption(configName, configName))
@@ -919,7 +917,6 @@ func editKubefirstBinaryForConfig() {
 		return
 	}
 
-	// Select a configuration
 	var selectedConfig string
 	err = huh.NewSelect[string]().
 		Title("Select a configuration to edit").
@@ -932,56 +929,40 @@ func editKubefirstBinaryForConfig() {
 		return
 	}
 
-	// Select Kubefirst binary option
-	var binaryOption string
-	err = huh.NewSelect[string]().
-		Title("Choose the Kubefirst binary option:").
-		Options(
-			huh.NewOption("Use ~/.ssot/k1space/.repositories/kubefirst/kubefirst", "repo"),
-			huh.NewOption("Specify a custom path", "custom"),
-		).
-		Value(&binaryOption).
-		Run()
+	config := indexFile.Configs[selectedConfig]
+	currentKubefirstPath := config.Flags["KUBEFIRST_PATH"]
 
+	// Display the current binary selection
+	fmt.Printf("Current Kubefirst binary path: %s\n", currentKubefirstPath)
+
+	kubefirstPath, err := promptKubefirstBinary(currentKubefirstPath)
 	if err != nil {
-		log.Error("Error in binary option selection", "error", err)
+		log.Error("Error selecting Kubefirst binary", "error", err)
 		return
 	}
 
-	var kubefirstPath string
-	switch binaryOption {
-	case "repo":
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Error("Error getting user home directory", "error", err)
-			return
-		}
-		kubefirstPath = filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst", "kubefirst")
-	case "custom":
-		err = huh.NewInput().
-			Title("Enter the path to the Kubefirst binary").
-			Value(&kubefirstPath).
-			Run()
+	log.Info("Selected configuration", "config", selectedConfig)
+	log.Info("New Kubefirst binary path", "path", kubefirstPath)
 
-		if err != nil {
-			log.Error("Error getting custom path", "error", err)
-			return
-		}
+	// Update the configuration
+	config.Flags["KUBEFIRST_PATH"] = kubefirstPath
+	indexFile.Configs[selectedConfig] = config
+
+	// Update the index file
+	err = createOrUpdateIndexFile(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "config.hcl"), indexFile)
+	if err != nil {
+		log.Error("Error updating index file", "error", err)
+		return
 	}
 
-	log.Info("Selected configuration", "config", selectedConfig)
-	log.Info("Selected Kubefirst binary option", "option", binaryOption)
-	log.Info("Kubefirst binary path", "path", kubefirstPath)
-
 	// Update the 01-kubefirst-cloud.sh file
-	configDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 	parts := strings.Split(selectedConfig, "_")
 	if len(parts) != 3 {
 		log.Error("Invalid config name format", "config", selectedConfig)
 		return
 	}
 	cloudProvider, region, prefix := parts[0], parts[1], parts[2]
-	scriptPath := filepath.Join(configDir, strings.ToLower(cloudProvider), strings.ToLower(region), prefix, "01-kubefirst-cloud.sh")
+	scriptPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(cloudProvider), strings.ToLower(region), prefix, "01-kubefirst-cloud.sh")
 
 	log.Info("Updating Kubefirst script", "scriptPath", scriptPath, "kubefirstPath", kubefirstPath)
 
@@ -991,7 +972,15 @@ func editKubefirstBinaryForConfig() {
 		return
 	}
 
-	log.Info("Successfully updated Kubefirst script")
+	// Update the .local.cloud.env file
+	envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(cloudProvider), strings.ToLower(region), prefix, ".local.cloud.env")
+	err = updateEnvFile(envFilePath, "KUBEFIRST_PATH", kubefirstPath)
+	if err != nil {
+		log.Error("Error updating .local.cloud.env file", "error", err)
+		return
+	}
+
+	log.Info("Successfully updated Kubefirst script and .local.cloud.env")
 	fmt.Printf("Successfully updated Kubefirst binary for configuration '%s'\n", selectedConfig)
 }
 
@@ -1027,7 +1016,9 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 	}
 
 	// Replace the first part (the binary path) with the new kubefirstPath
-	parts[0] = kubefirstPath
+	configName := filepath.Base(filepath.Dir(scriptPath))
+	envVarName := fmt.Sprintf("${%s_KUBEFIRST_PATH}", strings.ToUpper(strings.ReplaceAll(configName, "-", "_")))
+	parts[0] = envVarName
 	lines[kubefirstLineIndex] = strings.Join(parts, " ")
 
 	updatedContent := strings.Join(lines, "\n")
