@@ -264,16 +264,48 @@ func deprovisionCluster() {
 	}
 	cloud, region, prefix := parts[0], parts[1], parts[2]
 
-	scriptContent := generateDeprovisionScript(cloud, region, prefix)
 	scriptPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", cloud, region, prefix, "deprovision.sh")
-	err = os.WriteFile(scriptPath, []byte(scriptContent), 0755)
-	if err != nil {
-		log.Error("Error writing deprovision script", "error", err)
-		return
+
+	regenerate := false
+	if _, err := os.Stat(scriptPath); err == nil {
+		regenerateForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("A deprovision script already exists. Do you want to regenerate it?").
+					Value(&regenerate),
+			),
+		)
+
+		err = regenerateForm.Run()
+		if err != nil {
+			log.Error("Error in regenerate confirmation", "error", err)
+			return
+		}
+
+		if !regenerate {
+			fmt.Println("Using existing deprovision script.")
+		} else {
+			fmt.Println("Regenerating deprovision script.")
+		}
 	}
 
-	fmt.Printf("Deprovisioning script generated at: %s\n", scriptPath)
-	fmt.Println("Please review the script and run it manually to deprovision the cluster.")
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) || regenerate {
+		scriptContent := generateDeprovisionScript(cloud, region, prefix)
+		if scriptContent == "" {
+			fmt.Println("Failed to generate deprovisioning script. Please check the logs for more information.")
+			return
+		}
+
+		err = os.WriteFile(scriptPath, []byte(scriptContent), 0755)
+		if err != nil {
+			log.Error("Error writing deprovision script", "error", err)
+			return
+		}
+
+		fmt.Printf("Deprovisioning script generated at: %s\n", scriptPath)
+	}
+
+	fmt.Println("Please review the script before running it to deprovision the cluster.")
 
 	var runScript bool
 	confirmForm := huh.NewForm(
@@ -307,30 +339,79 @@ func deprovisionCluster() {
 }
 
 func generateDeprovisionScript(cloud, region, prefix string) string {
+	// Load the .local.cloud.env file
+	envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", cloud, region, prefix, ".local.cloud.env")
+	envContent, err := os.ReadFile(envFilePath)
+	if err != nil {
+		log.Error("Error reading .local.cloud.env file", "error", err)
+		return ""
+	}
+
+	// Parse the environment variables
+	envVars := make(map[string]string)
+	for _, line := range strings.Split(string(envContent), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimPrefix(parts[0], "export ")
+			value := strings.Trim(parts[1], "\"")
+			envVars[key] = value
+		}
+	}
+
+	// Extract required values
+	clusterName := envVars[fmt.Sprintf("K2_%s_%s_CLUSTER_NAME", strings.ToUpper(cloud), strings.ToUpper(region))]
+	gitProvider := envVars[fmt.Sprintf("K2_%s_%s_GIT_PROVIDER", strings.ToUpper(cloud), strings.ToUpper(region))]
+	gitOrg := envVars[fmt.Sprintf("K2_%s_%s_%s_ORG", strings.ToUpper(cloud), strings.ToUpper(region), strings.ToUpper(gitProvider))]
+	domain := envVars[fmt.Sprintf("K2_%s_%s_DOMAIN_NAME", strings.ToUpper(cloud), strings.ToUpper(region))]
+	subdomain := envVars[fmt.Sprintf("K2_%s_%s_SUBDOMAIN", strings.ToUpper(cloud), strings.ToUpper(region))]
+
 	return fmt.Sprintf(`#!/bin/bash
 set -e
 
 echo "Deprovisioning cluster for %s in region %s with prefix %s"
 
-# Install dependencies
-brew install terraform kubectl gum
+# Check for required tools
+for cmd in kubectl kubefirst terraform doctl; do
+    if ! command -v $cmd &> /dev/null; then
+        echo "Error: $cmd is not installed or not in PATH"
+        exit 1
+    fi
+done
 
 # Get kubeconfig
-kubectl config use-context %s-%s-%s
+CLUSTER_NAME="%s"
+doctl kubernetes cluster kubeconfig save $CLUSTER_NAME
+
+# Get the actual context name from kubectl
+CONTEXT_NAME=$(kubectl config get-contexts --output=name | grep $CLUSTER_NAME)
+
+if [ -z "$CONTEXT_NAME" ]; then
+    echo "Error: Unable to find context for cluster $CLUSTER_NAME"
+    exit 1
+fi
+
+# Use the found context
+kubectl config use-context $CONTEXT_NAME
 
 # Get Vault token
-VAULT_TOKEN=$(kubectl -n vault get secrets/vault-unseal-secret --template='{{index .data "root-token"}}' | base64 -d)
+VAULT_TOKEN=$(kubectl --context $CONTEXT_NAME -n vault get secrets/vault-unseal-secret --template='{{index .data "root-token"}}' | base64 -d)
+if [ -z "$VAULT_TOKEN" ]; then
+    echo "Error: Failed to retrieve Vault token"
+    exit 1
+fi
 
 # Set environment variables
 kubefirst terraform set-env \
   --vault-token $VAULT_TOKEN \
-  --vault-url https://vault.%s.%s.cloud \
+  --vault-url https://vault.%s.%s \
   --output-file .env
 source .env
 
 # Clone gitops repository
-git clone git@github.com:<my-org>/gitops.git
-cd gitops/terraform
+REPO_PATH=~/.ssot/k1space/%s/%s/%s/.repositories/gitops
+git clone git@%s.com:%s/gitops.git $REPO_PATH
+ln -sf $REPO_PATH ~/.ssot/k1space/%s/%s/%s/gitops
+cd $REPO_PATH/terraform
 
 # Deprovision cloud provider resources
 cd %s
@@ -338,18 +419,17 @@ terraform init
 terraform destroy -auto-approve
 
 # Deprovision git provider resources
-cd ../github  # or ../gitlab for GitLab
+cd ../%s
 terraform init
 terraform destroy -auto-approve
-
-# Clean up local resources
-cd ../../..
-rm -rf gitops
-rm .env
 
 # Remove k3d cluster
 kubefirst launch down
 
+# Cleanup
+cd ~
+rm -rf $REPO_PATH ~/.ssot/k1space/%s/%s/%s/gitops .env
+
 echo "Deprovisioning complete. Please manually remove any remaining cloud resources if necessary."
-`, cloud, region, prefix, cloud, region, prefix, region, cloud, cloud)
+`, cloud, region, prefix, clusterName, subdomain, domain, cloud, region, prefix, gitProvider, gitOrg, cloud, region, prefix, cloud, gitProvider, cloud, region, prefix)
 }
