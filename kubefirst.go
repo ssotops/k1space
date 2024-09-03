@@ -933,7 +933,11 @@ func editKubefirstBinaryForConfig() {
 	currentKubefirstPath := config.Flags["KUBEFIRST_PATH"]
 
 	// Display the current binary selection
-	fmt.Printf("Current Kubefirst binary path: %s\n", currentKubefirstPath)
+	if currentKubefirstPath == "" {
+		fmt.Println("Current Kubefirst binary path: Not set")
+	} else {
+		fmt.Printf("Current Kubefirst binary path: %s\n", currentKubefirstPath)
+	}
 
 	kubefirstPath, err := promptKubefirstBinary(currentKubefirstPath)
 	if err != nil {
@@ -946,6 +950,7 @@ func editKubefirstBinaryForConfig() {
 
 	// Update the configuration
 	config.Flags["KUBEFIRST_PATH"] = kubefirstPath
+	config.Flags[selectedConfig+"_KUBEFIRST_PATH"] = kubefirstPath
 	indexFile.Configs[selectedConfig] = config
 
 	// Update the index file
@@ -969,18 +974,21 @@ func editKubefirstBinaryForConfig() {
 	err = updateKubefirstScript(scriptPath, kubefirstPath)
 	if err != nil {
 		log.Error("Error updating Kubefirst script", "error", err)
-		return
+		fmt.Printf("Failed to update the Kubefirst script. You may need to manually edit %s\n", scriptPath)
+	} else {
+		log.Info("Successfully updated Kubefirst script")
 	}
 
 	// Update the .local.cloud.env file
 	envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(cloudProvider), strings.ToLower(region), prefix, ".local.cloud.env")
-	err = updateEnvFile(envFilePath, "KUBEFIRST_PATH", kubefirstPath)
+	err = updateEnvFile(envFilePath, selectedConfig+"_KUBEFIRST_PATH", kubefirstPath)
 	if err != nil {
 		log.Error("Error updating .local.cloud.env file", "error", err)
-		return
+		fmt.Printf("Failed to update the .local.cloud.env file. You may need to manually edit %s\n", envFilePath)
+	} else {
+		log.Info("Successfully updated .local.cloud.env file")
 	}
 
-	log.Info("Successfully updated Kubefirst script and .local.cloud.env")
 	fmt.Printf("Successfully updated Kubefirst binary for configuration '%s'\n", selectedConfig)
 }
 
@@ -989,6 +997,8 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 	if err != nil {
 		return fmt.Errorf("error reading script file: %w", err)
 	}
+
+	log.Info("Current script content", "content", string(content))
 
 	lines := strings.Split(string(content), "\n")
 	if len(lines) == 0 {
@@ -1004,22 +1014,27 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 		}
 	}
 
-	if kubefirstLineIndex == -1 {
-		return fmt.Errorf("kubefirst command not found in script")
-	}
-
-	// Update the Kubefirst binary path
-	kubefirstLine := lines[kubefirstLineIndex]
-	parts := strings.Fields(kubefirstLine)
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid kubefirst command format")
-	}
-
-	// Replace the first part (the binary path) with the new kubefirstPath
 	configName := filepath.Base(filepath.Dir(scriptPath))
 	envVarName := fmt.Sprintf("${%s_KUBEFIRST_PATH}", strings.ToUpper(strings.ReplaceAll(configName, "-", "_")))
-	parts[0] = envVarName
-	lines[kubefirstLineIndex] = strings.Join(parts, " ")
+
+	if kubefirstLineIndex == -1 {
+		// If kubefirst command is not found, add it to the end of the script
+		kubefirstLine := fmt.Sprintf("%s civo create \\", envVarName)
+		lines = append(lines, "", "# Added by k1space", kubefirstLine)
+		log.Info("Added kubefirst command to script", "line", kubefirstLine)
+	} else {
+		// Update the existing kubefirst command line
+		kubefirstLine := lines[kubefirstLineIndex]
+		parts := strings.Fields(kubefirstLine)
+		if len(parts) < 2 {
+			return fmt.Errorf("invalid kubefirst command format")
+		}
+
+		// Replace the first part (the binary path) with the new kubefirstPath
+		parts[0] = envVarName
+		lines[kubefirstLineIndex] = strings.Join(parts, " ")
+		log.Info("Updated existing kubefirst command in script", "line", lines[kubefirstLineIndex])
+	}
 
 	updatedContent := strings.Join(lines, "\n")
 	err = os.WriteFile(scriptPath, []byte(updatedContent), 0644)
@@ -1027,5 +1042,6 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 		return fmt.Errorf("error writing updated script: %w", err)
 	}
 
+	log.Info("Script updated successfully", "path", scriptPath)
 	return nil
 }
