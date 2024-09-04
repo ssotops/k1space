@@ -23,17 +23,12 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 
-	log.Info("Starting createConfig function")
-
-	log.Info("CloudConfig initialized", "config", fmt.Sprintf("%+v", config))
-
 	defer func() {
 		log.Info("Final config state", "config", fmt.Sprintf("%+v", config))
 	}()
 
 	if config.Flags == nil {
 		config.Flags = &sync.Map{}
-		log.Info("Reinitializing config.Flags")
 	}
 
 	indexFile, err := loadIndexFile()
@@ -41,7 +36,6 @@ func createConfig(config *CloudConfig) {
 		log.Error("Error loading index file", "error", err)
 		return
 	}
-	log.Info("Index file loaded", "indexFile", fmt.Sprintf("%+v", indexFile))
 
 	cloudsFile, err := loadCloudsFile()
 	if err != nil {
@@ -264,6 +258,16 @@ func createConfig(config *CloudConfig) {
 	}
 	log.Info("Files generated successfully")
 
+	// Update the .local.cloud.env file to ensure KUBEFIRST_PATH is set correctly
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
+	envFilePath := filepath.Join(baseDir, ".local.cloud.env")
+	err = updateEnvFile(envFilePath, fmt.Sprintf("%s_%s_%s", config.StaticPrefix, config.CloudPrefix, config.Region), kubefirstPath)
+	if err != nil {
+		log.Error("Error updating .local.cloud.env file", "error", err)
+		return
+	}
+	log.Info("Updated .local.cloud.env file with KUBEFIRST_PATH")
+
 	err = updateIndexFile(config, indexFile)
 	if err != nil {
 		log.Error("Error updating index file", "error", err)
@@ -277,9 +281,6 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 	log.Info("Clouds file updated successfully")
-
-	// Define baseDir
-	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 
 	// Pretty-print the summary
 	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))

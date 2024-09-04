@@ -981,15 +981,25 @@ func editKubefirstBinaryForConfig() {
 
 	// Update the .local.cloud.env file
 	envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(cloudProvider), strings.ToLower(region), prefix, ".local.cloud.env")
-	err = updateEnvFile(envFilePath, "KUBEFIRST_PATH", kubefirstPath)
+	err = updateEnvFile(envFilePath, selectedConfig, kubefirstPath)
 	if err != nil {
 		log.Error("Error updating .local.cloud.env file", "error", err)
 		fmt.Printf("Failed to update the .local.cloud.env file. You may need to manually edit %s\n", envFilePath)
 	} else {
-		log.Info("Successfully updated .local.cloud.env file")
+		log.Info("Successfully updated .local.cloud.env file", "path", envFilePath)
+	}
+
+	// Update the 01-kubefirst-cloud.sh file
+	err = updateKubefirstScript(scriptPath, kubefirstPath) // Changed := to =
+	if err != nil {
+		log.Error("Error updating Kubefirst script", "error", err)
+		fmt.Printf("Failed to update the Kubefirst script. You may need to manually edit %s\n", scriptPath)
+	} else {
+		log.Info("Successfully updated Kubefirst script", "path", scriptPath)
 	}
 
 	fmt.Printf("Successfully updated Kubefirst binary for configuration '%s'\n", selectedConfig)
+	fmt.Printf("KUBEFIRST_PATH set to: %s\n", kubefirstPath)
 }
 
 func updateKubefirstScript(scriptPath, kubefirstPath string) error {
