@@ -91,8 +91,6 @@ func createOrUpdateIndexFile(path string, indexFile IndexFile) error {
 }
 
 func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
-	log.Info("Starting updateIndexFile function", "config", fmt.Sprintf("%+v", config), "indexFile", fmt.Sprintf("%+v", indexFile))
-
 	indexPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "config.hcl")
 
 	// Update LastUpdated
@@ -149,8 +147,6 @@ func updateIndexFile(config *CloudConfig, indexFile IndexFile) error {
 			delete(indexFile.Configs, key)
 		}
 	}
-
-	log.Info("Updated indexFile", "indexFile", fmt.Sprintf("%+v", indexFile))
 
 	return createOrUpdateIndexFile(indexPath, indexFile)
 }

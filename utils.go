@@ -435,3 +435,43 @@ func waitForQuit() {
 		}
 	}
 }
+
+func getGlobalKubefirstPath() (string, error) {
+	path, err := exec.LookPath("kubefirst")
+	if err != nil {
+		return "", fmt.Errorf("global kubefirst not found: %w", err)
+	}
+	return path, nil
+}
+
+func updateEnvFile(filePath, configName, kubefirstPath string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("error reading .local.cloud.env file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	updatedLines := make([]string, 0, len(lines))
+	kubefirstPathUpdated := false
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "export KUBEFIRST_PATH=") {
+			updatedLines = append(updatedLines, fmt.Sprintf("export KUBEFIRST_PATH=\"%s\"", kubefirstPath))
+			kubefirstPathUpdated = true
+		} else if !strings.Contains(line, "_KUBEFIRST_PATH=") {
+			updatedLines = append(updatedLines, line)
+		}
+	}
+
+	if !kubefirstPathUpdated {
+		updatedLines = append(updatedLines, fmt.Sprintf("export KUBEFIRST_PATH=\"%s\"", kubefirstPath))
+	}
+
+	updatedContent := strings.Join(updatedLines, "\n")
+	err = os.WriteFile(filePath, []byte(updatedContent), 0644)
+	if err != nil {
+		return fmt.Errorf("error writing updated .local.cloud.env file: %w", err)
+	}
+
+	return nil
+}

@@ -23,17 +23,12 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 
-	log.Info("Starting createConfig function")
-
-	log.Info("CloudConfig initialized", "config", fmt.Sprintf("%+v", config))
-
 	defer func() {
 		log.Info("Final config state", "config", fmt.Sprintf("%+v", config))
 	}()
 
 	if config.Flags == nil {
 		config.Flags = &sync.Map{}
-		log.Info("Reinitializing config.Flags")
 	}
 
 	indexFile, err := loadIndexFile()
@@ -41,7 +36,6 @@ func createConfig(config *CloudConfig) {
 		log.Error("Error loading index file", "error", err)
 		return
 	}
-	log.Info("Index file loaded", "indexFile", fmt.Sprintf("%+v", indexFile))
 
 	cloudsFile, err := loadCloudsFile()
 	if err != nil {
@@ -50,11 +44,14 @@ func createConfig(config *CloudConfig) {
 	}
 	log.Info("Clouds file loaded", "cloudsFile", fmt.Sprintf("%+v", cloudsFile))
 
-	kubefirstPath, err := promptKubefirstBinary()
+	kubefirstPath, err := promptKubefirstBinary("")
 	if err != nil {
 		log.Error("Error selecting kubefirst binary", "error", err)
 		return
 	}
+
+	// Set the KUBEFIRST_PATH flag
+	config.Flags.Store("KUBEFIRST_PATH", kubefirstPath)
 
 	// Prompt user if they want to use values from a previous config
 	var usePreviousConfig bool
@@ -243,7 +240,7 @@ func createConfig(config *CloudConfig) {
 			nodeParts := strings.Fields(fi.Value)
 			if len(nodeParts) > 0 {
 				config.Flags.Store(fi.Name, nodeParts[0])
-        log.Info("Debug: After updating node-type flag", "config", fmt.Sprintf("%+v", config))
+				log.Info("Debug: After updating node-type flag", "config", fmt.Sprintf("%+v", config))
 			}
 		}
 		if fi.Name == "cloud-region" {
@@ -261,6 +258,16 @@ func createConfig(config *CloudConfig) {
 	}
 	log.Info("Files generated successfully")
 
+	// Update the .local.cloud.env file to ensure KUBEFIRST_PATH is set correctly
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region), config.StaticPrefix)
+	envFilePath := filepath.Join(baseDir, ".local.cloud.env")
+	err = updateEnvFile(envFilePath, fmt.Sprintf("%s_%s_%s", config.StaticPrefix, config.CloudPrefix, config.Region), kubefirstPath)
+	if err != nil {
+		log.Error("Error updating .local.cloud.env file", "error", err)
+		return
+	}
+	log.Info("Updated .local.cloud.env file with KUBEFIRST_PATH")
+
 	err = updateIndexFile(config, indexFile)
 	if err != nil {
 		log.Error("Error updating index file", "error", err)
@@ -274,9 +281,6 @@ func createConfig(config *CloudConfig) {
 		return
 	}
 	log.Info("Clouds file updated successfully")
-
-	// Define baseDir
-	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(config.CloudPrefix), strings.ToLower(config.Region))
 
 	// Pretty-print the summary
 	fmt.Println(style.Render("✅ Configuration completed successfully! Summary:"))
@@ -521,14 +525,36 @@ op run --env-file="./.local.cloud.env" -- sh ./01-kubefirst-cloud.sh
 func generateKubefirstContent(config *CloudConfig, kubefirstPath string) string {
 	var content strings.Builder
 	content.WriteString("#!/bin/bash\n\n")
-	content.WriteString(fmt.Sprintf("%s %s create \\\n", kubefirstPath, strings.ToLower(config.CloudPrefix)))
+
+	// Add a check to source the .local.cloud.env file if it hasn't been sourced already
+	content.WriteString(`# Source the .local.cloud.env file if it hasn't been sourced already
+if [ -z "$K1_ENV_SOURCED" ]; then
+    if [ -f "./.local.cloud.env" ]; then
+        source ./.local.cloud.env
+        export K1_ENV_SOURCED=true
+    else
+        echo "Error: .local.cloud.env file not found. Please run this script from the correct directory or use 00-init.sh."
+        exit 1
+    fi
+fi
+
+# Check if KUBEFIRST_PATH is set
+if [ -z "$KUBEFIRST_PATH" ]; then
+    echo "Error: KUBEFIRST_PATH is not set. Please ensure .local.cloud.env file is properly configured."
+    exit 1
+fi
+
+`)
 
 	prefix := fmt.Sprintf("%s_%s_%s", config.StaticPrefix, strings.ToUpper(config.CloudPrefix), strings.ToUpper(config.Region))
+
+	content.WriteString("\"${KUBEFIRST_PATH}\" civo create \\\n")
+
 	flags := make([]string, 0)
 	config.Flags.Range(func(k, v interface{}) bool {
 		flag := k.(string)
 		value := v.(string)
-		if value != "" {
+		if value != "" && flag != "KUBEFIRST_PATH" { // Exclude KUBEFIRST_PATH from flags
 			envVarName := fmt.Sprintf("%s_%s", prefix, strings.ToUpper(strings.ReplaceAll(flag, "-", "_")))
 			flags = append(flags, fmt.Sprintf("  --%s \"$%s\"", flag, envVarName))
 		}
@@ -558,63 +584,39 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-func promptKubefirstBinary() (string, error) {
-	var useLocal bool
-	err := huh.NewConfirm().
-		Title("Do you want to use a local kubefirst installation? (No for global)").
-		Value(&useLocal).
-		Run()
-
+func promptKubefirstBinary(currentPath string) (string, error) {
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error getting user home directory: %w", err)
 	}
 
-	if !useLocal {
-		path, err := exec.LookPath("kubefirst")
-		if err != nil {
-			return "", fmt.Errorf("global kubefirst not found: %w", err)
-		}
-		version, err := exec.Command(path, "version").Output()
-		if err != nil {
-			return "", fmt.Errorf("error getting kubefirst version: %w", err)
-		}
-		fmt.Printf("Using global kubefirst: %s\nVersion: %s\n", path, string(version))
-		return path, nil
+	localPath := filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst", "kubefirst")
+	globalPath, globalErr := getGlobalKubefirstPath()
+
+	var options []huh.Option[string]
+
+	if currentPath != globalPath && globalErr == nil {
+		options = append(options, huh.NewOption("Use global kubefirst", globalPath))
 	}
 
-	// Local option sub-menu
-	var localOption string
+	if currentPath != localPath {
+		options = append(options, huh.NewOption("Use ~/.ssot/k1space/.repositories/kubefirst/kubefirst", localPath))
+	}
+
+	options = append(options, huh.NewOption("Specify a custom path", "custom"))
+
+	var selectedOption string
 	err = huh.NewSelect[string]().
-		Title("Choose the local kubefirst option:").
-		Options(
-			huh.NewOption("Use ~/.ssot/k1space/.repositories/kubefirst/kubefirst", "repo"),
-			huh.NewOption("Specify a custom path", "custom"),
-		).
-		Value(&localOption).
+		Title("Choose the kubefirst binary option:").
+		Options(options...).
+		Value(&selectedOption).
 		Run()
 
 	if err != nil {
 		return "", err
 	}
 
-	switch localOption {
-	case "repo":
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("error getting user home directory: %w", err)
-		}
-		repoPath := filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst", "kubefirst")
-
-		// Check if the file exists
-		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-			return "", fmt.Errorf("kubefirst binary not found at %s", repoPath)
-		}
-
-		log.Info("Using kubefirst binary from repository", "path", repoPath)
-
-		// Return the absolute path
-		return repoPath, nil
-	case "custom":
+	if selectedOption == "custom" {
 		var customPath string
 		err = huh.NewInput().
 			Title("Enter the path to the local kubefirst binary").
@@ -630,11 +632,10 @@ func promptKubefirstBinary() (string, error) {
 			return "", fmt.Errorf("kubefirst binary not found at %s", customPath)
 		}
 
-		log.Info("Using custom kubefirst binary", "path", customPath)
 		return customPath, nil
-	default:
-		return "", fmt.Errorf("invalid local option selected")
 	}
+
+	return selectedOption, nil
 }
 
 func fetchKubefirstFlags(kubefirstPath, cloudProvider string) (map[string]string, error) {

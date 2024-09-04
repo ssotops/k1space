@@ -901,14 +901,12 @@ func printSummaryTable(summary [][]string) {
 }
 
 func editKubefirstBinaryForConfig() {
-	// Load existing configurations
 	indexFile, err := loadIndexFile()
 	if err != nil {
 		log.Error("Error loading index file", "error", err)
 		return
 	}
 
-	// Prepare options for config selection
 	configOptions := make([]huh.Option[string], 0, len(indexFile.Configs))
 	for configName := range indexFile.Configs {
 		configOptions = append(configOptions, huh.NewOption(configName, configName))
@@ -919,7 +917,6 @@ func editKubefirstBinaryForConfig() {
 		return
 	}
 
-	// Select a configuration
 	var selectedConfig string
 	err = huh.NewSelect[string]().
 		Title("Select a configuration to edit").
@@ -932,67 +929,77 @@ func editKubefirstBinaryForConfig() {
 		return
 	}
 
-	// Select Kubefirst binary option
-	var binaryOption string
-	err = huh.NewSelect[string]().
-		Title("Choose the Kubefirst binary option:").
-		Options(
-			huh.NewOption("Use ~/.ssot/k1space/.repositories/kubefirst/kubefirst", "repo"),
-			huh.NewOption("Specify a custom path", "custom"),
-		).
-		Value(&binaryOption).
-		Run()
+	config := indexFile.Configs[selectedConfig]
+	currentKubefirstPath := config.Flags["KUBEFIRST_PATH"]
 
+	// Display the current binary selection
+	if currentKubefirstPath == "" {
+		fmt.Println("Current Kubefirst binary path: Not set")
+	} else {
+		fmt.Printf("Current Kubefirst binary path: %s\n", currentKubefirstPath)
+	}
+
+	kubefirstPath, err := promptKubefirstBinary(currentKubefirstPath)
 	if err != nil {
-		log.Error("Error in binary option selection", "error", err)
+		log.Error("Error selecting Kubefirst binary", "error", err)
 		return
 	}
 
-	var kubefirstPath string
-	switch binaryOption {
-	case "repo":
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Error("Error getting user home directory", "error", err)
-			return
-		}
-		kubefirstPath = filepath.Join(homeDir, ".ssot", "k1space", ".repositories", "kubefirst", "kubefirst")
-	case "custom":
-		err = huh.NewInput().
-			Title("Enter the path to the Kubefirst binary").
-			Value(&kubefirstPath).
-			Run()
+	log.Info("Selected configuration", "config", selectedConfig)
+	log.Info("New Kubefirst binary path", "path", kubefirstPath)
 
-		if err != nil {
-			log.Error("Error getting custom path", "error", err)
-			return
-		}
+	// Update the configuration
+	config.Flags["KUBEFIRST_PATH"] = kubefirstPath
+	config.Flags[selectedConfig+"_KUBEFIRST_PATH"] = kubefirstPath
+	indexFile.Configs[selectedConfig] = config
+
+	// Update the index file
+	err = createOrUpdateIndexFile(filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", "config.hcl"), indexFile)
+	if err != nil {
+		log.Error("Error updating index file", "error", err)
+		return
 	}
 
-	log.Info("Selected configuration", "config", selectedConfig)
-	log.Info("Selected Kubefirst binary option", "option", binaryOption)
-	log.Info("Kubefirst binary path", "path", kubefirstPath)
-
 	// Update the 01-kubefirst-cloud.sh file
-	configDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space")
 	parts := strings.Split(selectedConfig, "_")
 	if len(parts) != 3 {
 		log.Error("Invalid config name format", "config", selectedConfig)
 		return
 	}
 	cloudProvider, region, prefix := parts[0], parts[1], parts[2]
-	scriptPath := filepath.Join(configDir, strings.ToLower(cloudProvider), strings.ToLower(region), prefix, "01-kubefirst-cloud.sh")
+	scriptPath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(cloudProvider), strings.ToLower(region), prefix, "01-kubefirst-cloud.sh")
 
 	log.Info("Updating Kubefirst script", "scriptPath", scriptPath, "kubefirstPath", kubefirstPath)
 
 	err = updateKubefirstScript(scriptPath, kubefirstPath)
 	if err != nil {
 		log.Error("Error updating Kubefirst script", "error", err)
-		return
+		fmt.Printf("Failed to update the Kubefirst script. You may need to manually edit %s\n", scriptPath)
+	} else {
+		log.Info("Successfully updated Kubefirst script")
 	}
 
-	log.Info("Successfully updated Kubefirst script")
+	// Update the .local.cloud.env file
+	envFilePath := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", strings.ToLower(cloudProvider), strings.ToLower(region), prefix, ".local.cloud.env")
+	err = updateEnvFile(envFilePath, selectedConfig, kubefirstPath)
+	if err != nil {
+		log.Error("Error updating .local.cloud.env file", "error", err)
+		fmt.Printf("Failed to update the .local.cloud.env file. You may need to manually edit %s\n", envFilePath)
+	} else {
+		log.Info("Successfully updated .local.cloud.env file", "path", envFilePath)
+	}
+
+	// Update the 01-kubefirst-cloud.sh file
+	err = updateKubefirstScript(scriptPath, kubefirstPath) // Changed := to =
+	if err != nil {
+		log.Error("Error updating Kubefirst script", "error", err)
+		fmt.Printf("Failed to update the Kubefirst script. You may need to manually edit %s\n", scriptPath)
+	} else {
+		log.Info("Successfully updated Kubefirst script", "path", scriptPath)
+	}
+
 	fmt.Printf("Successfully updated Kubefirst binary for configuration '%s'\n", selectedConfig)
+	fmt.Printf("KUBEFIRST_PATH set to: %s\n", kubefirstPath)
 }
 
 func updateKubefirstScript(scriptPath, kubefirstPath string) error {
@@ -1000,6 +1007,8 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 	if err != nil {
 		return fmt.Errorf("error reading script file: %w", err)
 	}
+
+	log.Info("Current script content", "content", string(content))
 
 	lines := strings.Split(string(content), "\n")
 	if len(lines) == 0 {
@@ -1009,32 +1018,43 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 	// Find the line that contains the kubefirst command
 	kubefirstLineIndex := -1
 	for i, line := range lines {
-		if strings.Contains(line, "kubefirst ") {
+		if strings.Contains(line, "kubefirst ") || strings.Contains(line, "${KUBEFIRST_PATH}") {
 			kubefirstLineIndex = i
 			break
 		}
 	}
 
 	if kubefirstLineIndex == -1 {
-		return fmt.Errorf("kubefirst command not found in script")
+		// If kubefirst command is not found, add it to the end of the script
+		kubefirstLine := "${KUBEFIRST_PATH} civo create \\"
+		lines = append(lines, "", "# Added by k1space", kubefirstLine)
+		log.Info("Added kubefirst command to script", "line", kubefirstLine)
+	} else {
+		// Update the existing kubefirst command line
+		lines[kubefirstLineIndex] = "${KUBEFIRST_PATH} civo create \\"
+		log.Info("Updated existing kubefirst command in script", "line", lines[kubefirstLineIndex])
 	}
 
-	// Update the Kubefirst binary path
-	kubefirstLine := lines[kubefirstLineIndex]
-	parts := strings.Fields(kubefirstLine)
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid kubefirst command format")
+	// Remove any duplicate kubefirst commands
+	newLines := []string{}
+	seenKubefirst := false
+	for _, line := range lines {
+		if strings.Contains(line, "kubefirst ") || strings.Contains(line, "${KUBEFIRST_PATH}") {
+			if !seenKubefirst {
+				newLines = append(newLines, line)
+				seenKubefirst = true
+			}
+		} else {
+			newLines = append(newLines, line)
+		}
 	}
 
-	// Replace the first part (the binary path) with the new kubefirstPath
-	parts[0] = kubefirstPath
-	lines[kubefirstLineIndex] = strings.Join(parts, " ")
-
-	updatedContent := strings.Join(lines, "\n")
+	updatedContent := strings.Join(newLines, "\n")
 	err = os.WriteFile(scriptPath, []byte(updatedContent), 0644)
 	if err != nil {
 		return fmt.Errorf("error writing updated script: %w", err)
 	}
 
+	log.Info("Script updated successfully", "path", scriptPath)
 	return nil
 }

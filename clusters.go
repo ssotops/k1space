@@ -28,7 +28,6 @@ func provisionCluster() {
 		return
 	}
 
-	log.Info("Index file loaded successfully", "version", indexFile.Version, "lastUpdated", indexFile.LastUpdated)
 	log.Info("Configs found", "count", len(indexFile.Configs))
 
 	// List available configs
