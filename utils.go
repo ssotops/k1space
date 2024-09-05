@@ -475,3 +475,37 @@ func updateEnvFile(filePath, configName, kubefirstPath string) error {
 
 	return nil
 }
+
+func printLocalSetup() {
+    fmt.Println(style.Render("\nKubefirst Local Setup:"))
+    
+    // Print environment variables
+    fmt.Println(style.Render("\nEnvironment Variables:"))
+    envVars := []string{"K1_LOCAL_DEBUG", "K1_LOCAL_KUBECONFIG_PATH", "CLUSTER_ID", "CLUSTER_TYPE", "INSTALL_METHOD", "K1_ACCESS_TOKEN", "IS_CLUSTER_ZERO"}
+    for _, env := range envVars {
+        value := os.Getenv(env)
+        if value != "" {
+            fmt.Printf("%s=%s\n", env, value)
+        }
+    }
+
+    // Print repository states
+    fmt.Println(style.Render("\nRepository States:"))
+    repos := []string{"kubefirst", "console", "kubefirst-api"}
+    baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", ".repositories")
+    
+    for _, repo := range repos {
+        repoPath := filepath.Join(baseDir, repo)
+        branch, err := getCurrentBranch(repoPath)
+        if err != nil {
+            branch = "Unknown"
+        }
+        
+        status, err := getRepoStatus(repoPath)
+        if err != nil {
+            status = "Error checking status"
+        }
+        
+        fmt.Printf("%-15s: Branch: %-20s Status: %s\n", repo, branch, status)
+    }
+}

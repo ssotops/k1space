@@ -4,6 +4,7 @@ import (
   "strings"
 	"sync"
 	"time"
+  "os/exec"
 
 	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
@@ -54,4 +55,17 @@ func stopSpinner(s *spinner.Spinner, success bool) {
 	} else {
 		color.Red("✗ " + s.Suffix)
 	}
+}
+
+func getRepoStatus(repoPath string) (string, error) {
+    cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain")
+    output, err := cmd.Output()
+    if err != nil {
+        return "", err
+    }
+    
+    if len(output) == 0 {
+        return "Clean", nil
+    }
+    return "Has local changes", nil
 }
