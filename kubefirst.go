@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -102,9 +103,9 @@ air
 
 func setupKubefirstRepositories() {
 	repos := []string{
-		"github.com/kubefirst/kubefirst",
-		"github.com/kubefirst/console",
-		"github.com/kubefirst/kubefirst-api",
+		"github.com/konstructio/kubefirst",
+		"github.com/konstructio/console",
+		"github.com/konstructio/kubefirst-api",
 	}
 
 	var branch string
@@ -551,16 +552,39 @@ func setupKubefirstAPI(branch string) error {
 	}
 	log.Info("Created setup script", "path", scriptFile)
 
-	// Spawn a background task to create the k3d cluster
-	go func() {
-		cmd := exec.Command("k3d", "cluster", "create", "dev")
-		output, err := cmd.CombinedOutput()
+	// Check if k3d cluster exists
+	clusterExists, err := checkK3dClusterExists("dev")
+	if err != nil {
+		return fmt.Errorf("error checking k3d cluster: %w", err)
+	}
+
+	if clusterExists {
+		printK3dClusters()
+
+		var deleteCluster bool
+		err := huh.NewConfirm().
+			Title("k3d cluster 'dev' already exists. Do you want to delete and recreate it?").
+			Value(&deleteCluster).
+			Run()
+
 		if err != nil {
-			log.Error("Failed to create k3d cluster", "error", err, "output", string(output))
-		} else {
-			log.Info("Successfully created k3d cluster")
+			return fmt.Errorf("error in user prompt: %w", err)
 		}
-	}()
+
+		if deleteCluster {
+			err = deleteAndRecreateK3dCluster("dev")
+			if err != nil {
+				return fmt.Errorf("error deleting and recreating k3d cluster: %w", err)
+			}
+		} else {
+			fmt.Println("Using existing k3d cluster 'dev'.")
+		}
+	} else {
+		err = createK3dCluster("dev")
+		if err != nil {
+			return fmt.Errorf("error creating k3d cluster: %w", err)
+		}
+	}
 
 	// Checkout specified branch
 	cmd := exec.Command("git", "-C", apiDir, "checkout", branch)
@@ -570,7 +594,7 @@ func setupKubefirstAPI(branch string) error {
 	}
 
 	fmt.Printf("Checked out %s branch for Kubefirst API\n", branch)
-	fmt.Println("Setup script created and k3d cluster creation started in the background.")
+	fmt.Println("Setup script created and k3d cluster setup completed.")
 	fmt.Println("You can now use the 'Run Kubefirst Repositories' command to start the API.")
 
 	return nil
@@ -609,14 +633,14 @@ func setupKubefirst(branch string) error {
 	// Find the line with kubefirst-api and replace it
 	lines := strings.Split(string(goModContent), "\n")
 	for i, line := range lines {
-		if strings.Contains(line, "github.com/kubefirst/kubefirst-api") {
-			lines[i] = fmt.Sprintf("github.com/kubefirst/kubefirst-api v0.0.0")
+		if strings.Contains(line, "github.com/konstructio/kubefirst-api") {
+			lines[i] = fmt.Sprintf("github.com/konstructio/kubefirst-api v0.0.0")
 			break
 		}
 	}
 
 	// Add the replace directive
-	lines = append(lines, fmt.Sprintf("replace github.com/kubefirst/kubefirst-api => %s", apiDir))
+	lines = append(lines, fmt.Sprintf("replace github.com/konstructio/kubefirst-api => %s", apiDir))
 
 	newContent := strings.Join(lines, "\n")
 
@@ -1056,5 +1080,53 @@ func updateKubefirstScript(scriptPath, kubefirstPath string) error {
 	}
 
 	log.Info("Script updated successfully", "path", scriptPath)
+	return nil
+}
+
+func checkK3dClusterExists(name string) (bool, error) {
+	cmd := exec.Command("k3d", "cluster", "list", "-o", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("error listing k3d clusters: %w", err)
+	}
+
+	var clusters []map[string]interface{}
+	err = json.Unmarshal(output, &clusters)
+	if err != nil {
+		return false, fmt.Errorf("error parsing k3d cluster list: %w", err)
+	}
+
+	for _, cluster := range clusters {
+		if cluster["name"] == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func deleteAndRecreateK3dCluster(name string) error {
+	fmt.Printf("Deleting k3d cluster '%s'...\n", name)
+	deleteCmd := exec.Command("k3d", "cluster", "delete", name)
+	deleteCmd.Stdout = os.Stdout
+	deleteCmd.Stderr = os.Stderr
+	err := deleteCmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to delete k3d cluster: %w", err)
+	}
+	fmt.Printf("k3d cluster '%s' deleted successfully.\n", name)
+
+	return createK3dCluster(name)
+}
+
+func createK3dCluster(name string) error {
+	fmt.Printf("Creating k3d cluster '%s'...\n", name)
+	createCmd := exec.Command("k3d", "cluster", "create", name)
+	createCmd.Stdout = os.Stdout
+	createCmd.Stderr = os.Stderr
+	err := createCmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to create k3d cluster: %w", err)
+	}
+	fmt.Printf("k3d cluster '%s' created successfully.\n", name)
 	return nil
 }

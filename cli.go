@@ -121,6 +121,7 @@ func runKubefirstMenu() {
 						huh.NewOption("Setup Kubefirst", "Setup Kubefirst"),
 						huh.NewOption("Run Kubefirst Repositories", "Run Kubefirst Repositories"),
 						huh.NewOption("Revert to Main", "Revert to Main"),
+						huh.NewOption("Print Local Setup", "Print Local Setup"), // Add this line
 						huh.NewOption("Back", "Back"),
 					).
 					Value(&selected),
@@ -144,6 +145,8 @@ func runKubefirstMenu() {
 			runKubefirstRepositories()
 		case "Revert to Main":
 			revertKubefirstToMain()
+		case "Print Local Setup":
+			printLocalSetup()
 		case "Back":
 			return
 		}
