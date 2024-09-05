@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/fatih/color"
+	"github.com/olekukonko/tablewriter"
 )
 
 func getVersion() string {
@@ -477,35 +478,74 @@ func updateEnvFile(filePath, configName, kubefirstPath string) error {
 }
 
 func printLocalSetup() {
-    fmt.Println(style.Render("\nKubefirst Local Setup:"))
-    
-    // Print environment variables
-    fmt.Println(style.Render("\nEnvironment Variables:"))
-    envVars := []string{"K1_LOCAL_DEBUG", "K1_LOCAL_KUBECONFIG_PATH", "CLUSTER_ID", "CLUSTER_TYPE", "INSTALL_METHOD", "K1_ACCESS_TOKEN", "IS_CLUSTER_ZERO"}
-    for _, env := range envVars {
-        value := os.Getenv(env)
-        if value != "" {
-            fmt.Printf("%s=%s\n", env, value)
-        }
-    }
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4")).
+		PaddingTop(1)
 
-    // Print repository states
-    fmt.Println(style.Render("\nRepository States:"))
-    repos := []string{"kubefirst", "console", "kubefirst-api"}
-    baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", ".repositories")
-    
-    for _, repo := range repos {
-        repoPath := filepath.Join(baseDir, repo)
-        branch, err := getCurrentBranch(repoPath)
-        if err != nil {
-            branch = "Unknown"
-        }
-        
-        status, err := getRepoStatus(repoPath)
-        if err != nil {
-            status = "Error checking status"
-        }
-        
-        fmt.Printf("%-15s: Branch: %-20s Status: %s\n", repo, branch, status)
-    }
+	subtitleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#5F9F9F")).
+		Italic(true)
+
+	fmt.Println(titleStyle.Render("Kubefirst Local Setup"))
+
+	// Print environment variables
+	fmt.Println(subtitleStyle.Render("\nEnvironment Variables:"))
+	envVars := []string{"K1_LOCAL_DEBUG", "K1_LOCAL_KUBECONFIG_PATH", "CLUSTER_ID", "CLUSTER_TYPE", "INSTALL_METHOD", "K1_ACCESS_TOKEN", "IS_CLUSTER_ZERO"}
+	for _, env := range envVars {
+		value := os.Getenv(env)
+		fmt.Printf("%s=\"%s\"\n", env, value) // This will show empty strings as K1_...=""
+	}
+
+	// Print repository states
+	fmt.Println(subtitleStyle.Render("\nRepository States:"))
+	repos := []string{"kubefirst", "console", "kubefirst-api"}
+	baseDir := filepath.Join(os.Getenv("HOME"), ".ssot", "k1space", ".repositories")
+
+	for _, repo := range repos {
+		repoPath := filepath.Join(baseDir, repo)
+		branch, err := getCurrentBranch(repoPath)
+		if err != nil {
+			branch = "Unknown"
+		}
+
+		status, err := getRepoStatus(repoPath)
+		if err != nil {
+			status = "Error checking status"
+		}
+
+		fmt.Printf("%-15s: Branch: %-20s Status: %s\n", repo, branch, status)
+	}
+}
+
+func printK3dClusters() {
+	cmd := exec.Command("k3d", "cluster", "list")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Error("Failed to list k3d clusters", "error", err)
+		return
+	}
+
+	fmt.Println(style.Render("\nCurrent k3d clusters:"))
+	table := tablewriter.NewWriter(os.Stdout)
+	table.SetHeader([]string{"Name", "Servers", "Agents", "LoadBalancer"})
+	table.SetBorder(false)
+	table.SetColumnColor(
+		tablewriter.Colors{tablewriter.FgHiCyanColor},
+		tablewriter.Colors{tablewriter.FgHiGreenColor},
+		tablewriter.Colors{tablewriter.FgHiGreenColor},
+		tablewriter.Colors{tablewriter.FgHiYellowColor},
+	)
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines[1:] { // Skip header
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 4 {
+			table.Append(fields[:4])
+		}
+	}
+	table.Render()
 }

@@ -600,7 +600,7 @@ func promptKubefirstBinary(currentPath string) (string, error) {
 	}
 
 	if currentPath != localPath {
-		options = append(options, huh.NewOption("Use ~/.ssot/k1space/.repositories/kubefirst/kubefirst", localPath))
+		options = append(options, huh.NewOption("Use ~/.ssot/k1space/.repositories/konstructio/kubefirst", localPath))
 	}
 
 	options = append(options, huh.NewOption("Specify a custom path", "custom"))
